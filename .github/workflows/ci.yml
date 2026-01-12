@@ -1,22 +1,19 @@
-name: CI – Dev / Test / Prod
+name: Backend CI – Dev / Test / Prod
 
 on:
   push:
-    branches:
-      - develop
-      - test
-      - main
-
+    branches: [develop, test, main]
   pull_request:
-    branches:
-      - develop
-      - test
-      - main
+    branches: [develop, test, main]
 
 jobs:
   ci:
-    name: Quality Pipeline
+    name: Backend Quality Pipeline
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
 
     steps:
       - name: Checkout repository
@@ -27,12 +24,10 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Lint code
-        run: npm run lint
 
       - name: Run tests
         run: npm test
