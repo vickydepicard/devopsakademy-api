@@ -1,19 +1,22 @@
-name: Backend CI – Dev / Test / Prod
+name: CI – API (Dev / Test / Prod)
 
 on:
   push:
-    branches: [develop, test, main]
+    branches:
+      - develop
+      - test
+      - main
+
   pull_request:
-    branches: [develop, test, main]
+    branches:
+      - develop
+      - test
+      - main
 
 jobs:
   ci:
-    name: Backend Quality Pipeline
+    name: API Quality Pipeline
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: backend
 
     steps:
       - name: Checkout repository
@@ -22,8 +25,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-         node-version: 20
-         cache: 'npm'
+          node-version: 20
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
