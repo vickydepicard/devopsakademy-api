@@ -1,10 +1,11 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
-import swaggerUi from "swagger-ui-express"
-import swaggerSpec from "./docs/swagger"
+import swaggerUi from "swagger-ui-express";
+import morgan from "morgan";
 
+import swaggerSpec from "./docs/swagger";
 
 // Routes
 import authRoutes from "./routes/auth";
@@ -25,60 +26,91 @@ import { checkTokenExpiration } from "./middleware/tokenExpiration";
 dotenv.config();
 
 const app = express();
-dotenv.config()
 
-// ================== MIDDLEWARE ==================
+/* =========================================================
+   ⚙️ APP CONFIG
+========================================================= */
+
+app.set("trust proxy", true);
+
+/* =========================================================
+   🔐 SECURITY
+========================================================= */
+
 app.use(helmet());
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:3000',      // ✅ AJOUT
-  'http://127.0.0.1:3000',      // ✅ recommandé
-  'http://172.27.93.136',
-  'http://172.27.93.136:5173'
-];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // Postman / curl
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error(`CORS blocked: ${origin}`), false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+/* =========================================================
+   📝 LOGS
+========================================================= */
 
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
-app.options('*', cors());
+/* =========================================================
+   🌍 CORS
+========================================================= */
+
+const allowedOrigins: string[] =
+  process.env.CORS_ORIGINS?.split(",").map(o => o.trim()) || [];
+
+console.log("🌍 Allowed CORS origins:", allowedOrigins);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Autorise Postman / curl / server-to-server
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.error(`❌ CORS blocked: ${origin}`);
+      return callback(new Error(`CORS blocked: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+/* =========================================================
+   📦 BODY PARSING
+========================================================= */
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ================== HEALTH ==================
+/* =========================================================
+   ❤️ HEALTH CHECK
+========================================================= */
 
-/**
- * @openapi
- * /health:
- *   get:
- *     summary: Vérifie l’état de l’API
- *     tags:
- *       - Health
- *     responses:
- *       200:
- *         description: API opérationnelle
- */
-
-app.get("/health", (req, res) => {
+app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "OK",
-    message: "DevOpsAkademy API is running",
+    service: "DevOpsAkademy API",
+    environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString(),
   });
 });
 
-// ================== ROUTES ==================
+/* =========================================================
+   🔑 TOKEN CHECK (EXCEPT AUTH & HEALTH)
+========================================================= */
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const openRoutes = ["/health", "/api/auth", "/api-docs"];
+
+  if (openRoutes.some(route => req.originalUrl.startsWith(route))) {
+    return next();
+  }
+
+  return checkTokenExpiration(req, res, next);
+});
+
+/* =========================================================
+   🚀 API ROUTES
+========================================================= */
+
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/courses", courseRoutes);
@@ -89,27 +121,30 @@ app.use("/api/enrollments", enrollmentsRoutes);
 app.use("/api/courses", lessonProgressRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contacts", contactRoutes);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 
+/* =========================================================
+   📚 SWAGGER
+========================================================= */
 
-// Vérification expiration token
-app.use(checkTokenExpiration);
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
+/* =========================================================
+   ❌ 404 HANDLER
+========================================================= */
 
-// ================== 404 ==================
-app.use("*", (req, res) => {
+app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
   });
 });
 
-// ================== ERRORS ==================
+/* =========================================================
+   🧯 GLOBAL ERROR HANDLER
+========================================================= */
+
 app.use(errorHandler);
 
-
-console.log("✅ Routes chargées : auth, users, courses, modules, enrollments");
-
-
+console.log("✅ DevOpsAkademy API routes loaded");
 
 export default app;
