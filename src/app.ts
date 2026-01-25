@@ -32,6 +32,8 @@ app.use(helmet());
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'http://localhost:3000',      // ✅ AJOUT
+  'http://127.0.0.1:3000',      // ✅ recommandé
   'http://172.27.93.136',
   'http://172.27.93.136:5173'
 ];
