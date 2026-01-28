@@ -2,6 +2,7 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { sendEmail } from '../services/mail.service';
 import { query } from "../config/database";
 
 const ACCESS_TOKEN_EXPIRY = "15m"; // access token court
@@ -76,6 +77,27 @@ export const register = async (req: Request, res: Response) => {
       sameSite: "lax",
       maxAge: 7 * 24 * 3600 * 1000,
     });
+
+        /* =====================================================
+       📧 ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
+    ===================================================== */
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Bienvenue sur DevOpsAkademy 🚀",
+        html: `
+          <h2>Bienvenue ${first_name} 👋</h2>
+          <p>Votre compte <b>DevOpsAkademy</b> a été créé avec succès.</p>
+          <p><b>Email :</b> ${email}</p>
+          <p>Vous pouvez maintenant vous connecter à la plateforme.</p>
+          <br/>
+          <p>— L'équipe DevOpsAkademy</p>
+        `,
+      });
+    } catch (mailError) {
+      console.error("MAIL REGISTER ERROR:", mailError);
+      // ❗ Ne jamais bloquer l'inscription si le mail échoue
+    }
 
     res.status(201).json({
       success: true,
@@ -325,3 +347,4 @@ export default {
   refreshToken,
   getCurrentUser,
 };
+

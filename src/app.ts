@@ -19,6 +19,11 @@ import lessonProgressRoutes from "./routes/lessonProgress.routes";
 import adminRoutes from "./routes/admin";
 import contactRoutes from "./routes/contactRoutes";
 
+import testMailRoute from './routes/test-mail.route';
+import mailRoute from './routes/mail.route';
+
+
+
 // Middleware
 import { errorHandler } from "./middleware/errorHandler";
 import { checkTokenExpiration } from "./middleware/tokenExpiration";
@@ -121,6 +126,11 @@ app.use("/api/enrollments", enrollmentsRoutes);
 app.use("/api/courses", lessonProgressRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contacts", contactRoutes);
+
+app.use('/api/test', testMailRoute);
+app.use('/api/mails', mailRoute);
+
+
 
 /* =========================================================
    📚 SWAGGER
