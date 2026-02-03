@@ -918,48 +918,53 @@ export const getCoursePublic = async (req: Request, res: Response): Promise<void
 export const getCourseById = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || null;
+    const user = req.user || null;
 
-    // 1️⃣ Récupération du cours
+    // 1️⃣ Récupérer le cours
     const [course]: any = await query(
       `SELECT 
-         c.id, c.title, c.short_description, c.long_description, c.thumbnail_url,
-         c.level, c.is_published, c.price, c.is_free, 
-         u.first_name, u.last_name
-       FROM courses c
-       JOIN users u ON c.instructor_id = u.id
-       WHERE c.id = ? AND c.is_published = 1`,
+        c.id, c.title, c.short_description, c.description,
+        c.thumbnail_url, c.level, c.price, c.is_free,
+        c.is_published,
+        u.first_name, u.last_name
+      FROM courses c
+      JOIN users u ON c.instructor_id = u.id
+      WHERE c.id = ?`,
       [id]
     );
 
     if (!course) {
-      return res.status(404).json({ success: false, message: "Cours introuvable." });
+      return res.status(404).json({ success: false, message: "Cours introuvable" });
     }
 
-    // 2️⃣ Vérifier si l’utilisateur est inscrit
+    // 2️⃣ Vérifier inscription
     let enrollment = null;
-    if (userId) {
-      const [result]: any = await query(
-        `SELECT is_approved, payment_status, payment_proof_url 
-         FROM course_enrollments 
+    if (user) {
+      const [e]: any = await query(
+        `SELECT is_approved FROM course_enrollments
          WHERE course_id = ? AND user_id = ?`,
-        [id, userId]
+        [id, user.id]
       );
-      enrollment = result || null;
+      enrollment = e || null;
     }
 
-    // 3️⃣ Cas non inscrit → aperçu partiel (2 modules max)
+    // 3️⃣ MODULES – APERÇU
     if (!enrollment) {
       const modules = await query(
-        `SELECT id, title 
-         FROM modules WHERE course_id = ? ORDER BY order_index ASC LIMIT 1`,
+        `SELECT id, title FROM modules
+         WHERE course_id = ?
+         ORDER BY order_index ASC
+         LIMIT 1`,
         [id]
       );
 
-      for (const m of modules) {
+      for (const m of modules as any[]) {
         m.lessons = await query(
-          `SELECT id, title, duration_minutes 
-           FROM lessons WHERE module_id = ? ORDER BY order_index ASC LIMIT 2`,
+          `SELECT id, title, duration_minutes
+           FROM lessons
+           WHERE module_id = ?
+           ORDER BY order_index ASC
+           LIMIT 2`,
           [m.id]
         );
       }
@@ -969,39 +974,41 @@ export const getCourseById = async (req: AuthenticatedRequest, res: Response) =>
         data: {
           ...course,
           modules,
-          access: "public",
+          access: "preview",
         },
       });
     }
 
-    // 4️⃣ Cas inscrit mais paiement en attente
-    if (enrollment.payment_status === "pending" || !enrollment.is_approved) {
+    // 4️⃣ Inscrit mais non validé
+    if (!enrollment.is_approved) {
       return res.json({
         success: true,
         data: {
           ...course,
           access: "pending",
-          payment_status: enrollment.payment_status,
-          payment_proof_url: enrollment.payment_proof_url,
         },
       });
     }
 
-    // 5️⃣ Cas validé → accès complet
+    // 5️⃣ ACCÈS COMPLET
     const modules = await query(
-      `SELECT id, title FROM modules WHERE course_id = ? ORDER BY order_index ASC`,
+      `SELECT id, title FROM modules
+       WHERE course_id = ?
+       ORDER BY order_index ASC`,
       [id]
     );
 
-    for (const module of modules) {
-      module.lessons = await query(
-        `SELECT id, title, duration_minutes 
-         FROM lessons WHERE module_id = ? ORDER BY order_index ASC`,
-        [module.id]
+    for (const m of modules as any[]) {
+      m.lessons = await query(
+        `SELECT id, title, duration_minutes
+         FROM lessons
+         WHERE module_id = ?
+         ORDER BY order_index ASC`,
+        [m.id]
       );
     }
 
-    return res.json({
+    res.json({
       success: true,
       data: {
         ...course,
@@ -1009,11 +1016,14 @@ export const getCourseById = async (req: AuthenticatedRequest, res: Response) =>
         access: "full",
       },
     });
-  } catch (error) {
-    console.error("❌ getCourseById error:", error);
-    res.status(500).json({ success: false, message: "Erreur serveur." });
+
+  } catch (err) {
+    console.error("❌ getCourseById:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 };
+
+
 
 
 export const getCoursePreview = async (req: Request, res: Response): Promise<void> => {
