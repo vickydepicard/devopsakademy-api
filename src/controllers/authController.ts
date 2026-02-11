@@ -5,6 +5,8 @@ import jwt from "jsonwebtoken";
 import { sendEmail } from '../services/mail.service';
 import { query } from "../config/database";
 
+import { AuthenticatedRequest } from "../middleware/auth";
+
 const ACCESS_TOKEN_EXPIRY = "15m"; // access token court
 const REFRESH_TOKEN_EXPIRY = "7d"; // refresh token long
 
@@ -348,3 +350,79 @@ export default {
   getCurrentUser,
 };
 
+// ... imports existants ...
+
+// Dans src/controllers/courseController.ts
+export const enrollInCourse = async (req: Request, res: Response) => {
+  // Implémentation de l'inscription
+};
+
+export const getCourseContent = async (req: Request, res: Response) => {
+  // Récupérer le contenu complet du cours pour les inscrits
+};
+
+export const getLesson = async (req: Request, res: Response) => {
+  // Récupérer une leçon spécifique (version pour inscrits)
+};
+
+// Ajoutez cette fonction au contrôleur
+export const getDashboard = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Utilisateur non authentifié",
+      });
+    }
+
+    // Récupérer les statistiques de l'utilisateur
+    const [userData]: any = await query(
+      `SELECT 
+        (SELECT COUNT(*) FROM enrollments WHERE user_id = ?) as enrolled_courses,
+        (SELECT COUNT(*) FROM lesson_progress WHERE user_id = ? AND completed = true) as completed_lessons,
+        (SELECT COUNT(DISTINCT course_id) FROM enrollments WHERE user_id = ? AND status = 'completed') as completed_courses`,
+      [userId, userId, userId]
+    );
+
+    // Récupérer les derniers cours
+    const [recentCourses]: any = await query(
+      `SELECT c.*, e.enrolled_at 
+       FROM enrollments e
+       JOIN courses c ON e.course_id = c.id
+       WHERE e.user_id = ?
+       ORDER BY e.enrolled_at DESC
+       LIMIT 5`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        user: req.user,
+        stats: {
+          enrolledCourses: userData?.enrolled_courses || 0,
+          completedLessons: userData?.completed_lessons || 0,
+          completedCourses: userData?.completed_courses || 0,
+        },
+        recentCourses: recentCourses || [],
+        quickActions: [
+          { label: "Continuer mon apprentissage", action: "/api/courses/my-courses" },
+          { label: "Explorer les cours", action: "/api/courses" },
+          { label: "Voir mon profil", action: "/api/profile" },
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Erreur dashboard:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération du dashboard",
+    });
+  }
+};
+
+
+
+// ... autres fonctions existantes ...

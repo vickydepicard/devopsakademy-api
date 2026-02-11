@@ -1,55 +1,53 @@
 import express from "express";
+import courseController from "../controllers/courseController";
 import {
-  createCourse,
-  getCourses,
-  getCourseById,
-  getCoursePublic,
-  updateCourse,
-  deleteCourse,
-  getCourseStudents,
-  getCourseFilters,
-  updateLessonStatus,
-  getLessonById,
-  getPopularCourses,
-  getCoursePreview
-} from "../controllers/courseController";
-import { authenticate, authorizeRoles } from "../middleware/auth";
+  allowVisitors,
+  requireAuth,
+  requireEnrollment,
+  requireInstructorOrAdmin
+} from "../middleware/permissions";
 
 const router = express.Router();
 
 // ========================
-// ✅ ROUTES PUBLIQUES
+// ✅ ROUTES PUBLIQUES (VISITEURS)
 // ========================
-router.get("/popular", getPopularCourses);
-router.get("/filters", getCourseFilters);
-router.get("/", getCourses);
-router.get("/public/:id", getCoursePublic); // 👈 accessible sans login
-router.get("/:id", authenticate, getCourseById); // accès complet si connecté
+router.get("/", allowVisitors, courseController.getCourses); // Liste
+router.get("/popular", allowVisitors, courseController.getPopularCourses);
+router.get("/filters", allowVisitors, courseController.getCourseFilters);
+router.get("/public/:id", allowVisitors, courseController.getCoursePublic); // Vue publique limitée
 
 // ========================
-// ✅ ROUTES PROTÉGÉES (ADMIN / FORMATEUR)
+// ✅ DÉTAILS DU COURS (2 VERSIONS)
 // ========================
-router.post("/", authenticate, authorizeRoles(["instructor", "admin"]), createCourse);
-router.put("/:id", authenticate, authorizeRoles(["instructor", "admin"]), updateCourse);
-router.delete("/:id", authenticate, authorizeRoles(["instructor", "admin"]), deleteCourse);
+// Version pour visiteurs (même que /public/:id mais avec URL plus propre)
+router.get("/:id", allowVisitors, courseController.getCourseById);
+
+// Version enrichie pour connectés (plus d'infos)
+router.get("/:id/details", requireAuth, courseController.getCourseByIdEnhanced);
 
 // ========================
-// ✅ ÉTUDIANTS PAR COURS
+// ✅ INSCRIPTION AU COURS (CONNECTÉ)
 // ========================
-router.get(
-  "/:id/students",
-  authenticate,
-  authorizeRoles(["instructor", "admin"]),
-  getCourseStudents
-);
-
-router.get("/:id/public", getCoursePreview);
-
+router.post("/:id/enroll", requireAuth, courseController.enrollCourse);
 
 // ========================
-// ✅ LEÇONS (étudiant connecté)
+// ✅ CONTENU DU COURS (INSCRIT)
 // ========================
-router.patch("/:courseId/lessons/:lessonId/status", authenticate, updateLessonStatus);
-router.get("/:courseId/lessons/:lessonId", authenticate, getLessonById);
+router.get("/:id/learn", requireAuth, requireEnrollment, courseController.getCourseContent);
+
+// ========================
+// ✅ LEÇONS (INSCRIT)
+// ========================
+router.get("/:id/lessons/:lessonId", requireAuth, requireEnrollment, courseController.getLesson);
+router.patch("/:id/lessons/:lessonId/status", requireAuth, requireEnrollment, courseController.updateLessonStatus);
+
+// ========================
+// ✅ GESTION DES COURS (INSTRUCTEUR/ADMIN)
+// ========================
+router.post("/", requireAuth, requireInstructorOrAdmin, courseController.createCourse);
+router.put("/:id", requireAuth, requireInstructorOrAdmin, courseController.updateCourse);
+router.delete("/:id", requireAuth, requireInstructorOrAdmin, courseController.deleteCourse);
+router.get("/:id/students", requireAuth, requireInstructorOrAdmin, courseController.getCourseStudents);
 
 export default router;
