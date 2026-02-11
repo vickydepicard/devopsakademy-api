@@ -4,9 +4,11 @@ import {
   login, 
   logout, 
   getCurrentUser, 
-  refreshToken 
+  refreshToken,
+  getDashboard  // ⬅️ IMPORT AJOUTÉ
 } from '../controllers/authController';
-import { authenticate } from '../middleware/auth'; // ✅ correction
+import { authenticate } from '../middleware/auth';
+import { requireAuth } from '../middleware/permissions'; // ⬅️ IMPORT AJOUTÉ
 
 const router = express.Router();
 
@@ -47,5 +49,8 @@ router.post('/refresh-token', refreshToken);
 // ================= ROUTES PROTÉGÉES =================
 router.post('/logout', authenticate, logout);
 router.get('/me', authenticate, getCurrentUser);
+
+// ✅ NOUVEAU : DASHBOARD (CONNECTÉ SEULEMENT)
+router.get('/dashboard', requireAuth, getDashboard);
 
 export default router;
