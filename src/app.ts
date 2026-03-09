@@ -28,6 +28,8 @@ import mailRoute from './routes/mail.route';
 import { errorHandler } from "./middleware/errorHandler";
 import { checkTokenExpiration } from "./middleware/tokenExpiration";
 
+import profileRoutes from "./routes/Profileroutes"
+
 dotenv.config();
 
 const app = express();
@@ -130,6 +132,8 @@ app.use("/api/contacts", contactRoutes);
 app.use('/api/test', testMailRoute);
 app.use('/api/mails', mailRoute);
 
+
+app.use("/api/profile", profileRoutes)
 
 
 

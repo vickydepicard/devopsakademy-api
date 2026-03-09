@@ -1,5 +1,6 @@
 // src/controllers/authController.ts
 import { Request, Response } from "express";
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { sendEmail } from '../services/mail.service';
@@ -7,8 +8,12 @@ import { query } from "../config/database";
 
 import { AuthenticatedRequest } from "../middleware/auth";
 
-const ACCESS_TOKEN_EXPIRY = "15m"; // access token court
-const REFRESH_TOKEN_EXPIRY = "7d"; // refresh token long
+// token_hash = SHA-256 du JWT brut (varchar 64 en BDD)
+const hashToken = (token: string): string =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const ACCESS_TOKEN_EXPIRY = "15m";
+const REFRESH_TOKEN_EXPIRY = "7d";
 
 const signAccessToken = (payload: object) => {
   return jwt.sign(payload, process.env.JWT_SECRET as string, {
@@ -43,9 +48,7 @@ export const register = async (req: Request, res: Response) => {
         .status(400)
         .json({ success: false, message: "Erreur de validation", errors });
 
-    const existingUsers = await query("SELECT id FROM users WHERE email = ?", [
-      email,
-    ]);
+    const existingUsers = await query("SELECT id FROM users WHERE email = ?", [email]);
     if (existingUsers.length > 0)
       return res
         .status(400)
@@ -69,8 +72,8 @@ export const register = async (req: Request, res: Response) => {
     const refreshToken = signRefreshToken({ id: userId, role });
 
     await query(
-      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
-      [userId, refreshToken]
+      "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
+      [userId, hashToken(refreshToken)]
     );
 
     res.cookie("refreshToken", refreshToken, {
@@ -80,7 +83,7 @@ export const register = async (req: Request, res: Response) => {
       maxAge: 7 * 24 * 3600 * 1000,
     });
 
-        /* =====================================================
+    /* =====================================================
        📧 ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
     ===================================================== */
     try {
@@ -125,9 +128,13 @@ export const register = async (req: Request, res: Response) => {
 // ---------------- LOGIN ----------------
 export const login = async (req: Request, res: Response) => {
   try {
+    // ✅ CORRECTION : le frontend envoie "password", pas "password_hash"
     const { email, password } = req.body;
+
     if (!email || !email.includes("@"))
       return res.status(400).json({ success: false, message: "Email invalide" });
+
+    // ✅ CORRECTION : vérifier "password" (pas "password_hash")
     if (!password)
       return res.status(400).json({ success: false, message: "Mot de passe requis" });
 
@@ -138,11 +145,13 @@ export const login = async (req: Request, res: Response) => {
         .json({ success: false, message: "Email ou mot de passe incorrect" });
 
     const user = users[0];
+
     if (!user.is_active)
       return res
         .status(403)
         .json({ success: false, message: "Compte désactivé" });
 
+    // ✅ CORRECTION : bcrypt.compare(password_en_clair, hash_en_bdd)
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     if (!isValidPassword)
       return res
@@ -156,8 +165,8 @@ export const login = async (req: Request, res: Response) => {
     const refreshToken = signRefreshToken(payload);
 
     await query(
-      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
-      [user.id, refreshToken]
+      "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
+      [user.id, hashToken(refreshToken)]
     );
 
     res.cookie("refreshToken", refreshToken, {
@@ -211,8 +220,8 @@ export const refreshToken = async (req: Request, res: Response) => {
         .json({ success: false, message: "Refresh token requis" });
     }
 
-    const rows: any[] = await query("SELECT * FROM refresh_tokens WHERE token = ?", [
-      providedToken,
+    const rows: any[] = await query("SELECT * FROM refresh_tokens WHERE token_hash = ?", [
+      hashToken(providedToken),
     ]);
     if (rows.length === 0) {
       return res
@@ -225,7 +234,7 @@ export const refreshToken = async (req: Request, res: Response) => {
       process.env.JWT_REFRESH_SECRET as string,
       async (err: any, decoded: any) => {
         if (err) {
-          await query("DELETE FROM refresh_tokens WHERE token = ?", [providedToken]);
+          await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(403)
             .json({ success: false, message: "Refresh token invalide ou expiré" });
@@ -237,27 +246,27 @@ export const refreshToken = async (req: Request, res: Response) => {
           [userId]
         );
         if (!dbUser) {
-          await query("DELETE FROM refresh_tokens WHERE token = ?", [providedToken]);
+          await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(404)
             .json({ success: false, message: "Utilisateur introuvable" });
         }
         if (!dbUser.is_active) {
-          await query("DELETE FROM refresh_tokens WHERE token = ?", [providedToken]);
+          await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(403)
             .json({ success: false, message: "Compte utilisateur désactivé" });
         }
 
-        await query("DELETE FROM refresh_tokens WHERE token = ?", [providedToken]);
+        await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
 
         const newPayload = { id: userId, role: dbUser.role };
         const newAccessToken = signAccessToken(newPayload);
         const newRefreshToken = signRefreshToken(newPayload);
 
         await query(
-          "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
-          [userId, newRefreshToken]
+          "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
+          [userId, hashToken(newRefreshToken)]
         );
 
         res.cookie("refreshToken", newRefreshToken, {
@@ -286,7 +295,7 @@ export const logout = async (req: Request, res: Response) => {
     const providedToken = tokenFromCookie || tokenFromBody;
 
     if (providedToken) {
-      await query("DELETE FROM refresh_tokens WHERE token = ?", [providedToken]);
+      await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
     }
 
     res.clearCookie("refreshToken", { httpOnly: true, sameSite: "lax" });
@@ -341,31 +350,7 @@ export const getCurrentUser = async (req: Request, res: Response) => {
   }
 };
 
-// ✅ Export par défaut pour éviter les erreurs d’import
-export default {
-  register,
-  login,
-  logout,
-  refreshToken,
-  getCurrentUser,
-};
-
-// ... imports existants ...
-
-// Dans src/controllers/courseController.ts
-export const enrollInCourse = async (req: Request, res: Response) => {
-  // Implémentation de l'inscription
-};
-
-export const getCourseContent = async (req: Request, res: Response) => {
-  // Récupérer le contenu complet du cours pour les inscrits
-};
-
-export const getLesson = async (req: Request, res: Response) => {
-  // Récupérer une leçon spécifique (version pour inscrits)
-};
-
-// Ajoutez cette fonction au contrôleur
+// ---------------- DASHBOARD ----------------
 export const getDashboard = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -377,19 +362,18 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
       });
     }
 
-    // Récupérer les statistiques de l'utilisateur
     const [userData]: any = await query(
       `SELECT 
-        (SELECT COUNT(*) FROM enrollments WHERE user_id = ?) as enrolled_courses,
-        (SELECT COUNT(*) FROM lesson_progress WHERE user_id = ? AND completed = true) as completed_lessons,
-        (SELECT COUNT(DISTINCT course_id) FROM enrollments WHERE user_id = ? AND status = 'completed') as completed_courses`,
+        (SELECT COUNT(*) FROM course_enrollments WHERE user_id = ?) as enrolled_courses,
+        (SELECT COUNT(*) FROM lesson_progress WHERE user_id = ? AND completed = 1) as completed_lessons,
+        (SELECT COUNT(DISTINCT course_id) FROM course_enrollments WHERE user_id = ? AND status = 'completed') as completed_courses`,
       [userId, userId, userId]
     );
 
-    // Récupérer les derniers cours
-    const [recentCourses]: any = await query(
-      `SELECT c.*, e.enrolled_at 
-       FROM enrollments e
+    const recentCourses: any[] = await query(
+      `SELECT c.id, c.title, c.slug, c.thumbnail_url, c.level, c.duration_hours,
+              e.enrolled_at, e.status, e.progress_percent
+       FROM course_enrollments e
        JOIN courses c ON e.course_id = c.id
        WHERE e.user_id = ?
        ORDER BY e.enrolled_at DESC
@@ -423,6 +407,12 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
   }
 };
 
-
-
-// ... autres fonctions existantes ...
+// ✅ Export par défaut
+export default {
+  register,
+  login,
+  logout,
+  refreshToken,
+  getCurrentUser,
+  getDashboard,
+};
