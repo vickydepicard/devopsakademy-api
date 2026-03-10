@@ -12,18 +12,15 @@ const router = express.Router();
 // ========================
 // ✅ ROUTES PUBLIQUES (VISITEURS)
 // ========================
-router.get("/", allowVisitors, courseController.getCourses); // Liste
+router.get("/", allowVisitors, courseController.getCourses);
 router.get("/popular", allowVisitors, courseController.getPopularCourses);
 router.get("/filters", allowVisitors, courseController.getCourseFilters);
-router.get("/public/:id", allowVisitors, courseController.getCoursePublic); // Vue publique limitée
+router.get("/public/:id", allowVisitors, courseController.getCoursePublic);
 
 // ========================
 // ✅ DÉTAILS DU COURS (2 VERSIONS)
 // ========================
-// Version pour visiteurs (même que /public/:id mais avec URL plus propre)
 router.get("/:id", allowVisitors, courseController.getCourseById);
-
-// Version enrichie pour connectés (plus d'infos)
 router.get("/:id/details", requireAuth, courseController.getCourseByIdEnhanced);
 
 // ========================
@@ -37,10 +34,23 @@ router.post("/:id/enroll", requireAuth, courseController.enrollCourse);
 router.get("/:id/learn", requireAuth, requireEnrollment, courseController.getCourseContent);
 
 // ========================
+// ✅ MODULES + LEÇONS — ROUTE AJOUTÉE
+// ========================
+router.get("/:id/modules", requireAuth, requireEnrollment, courseController.getCourseModules);
+
+// ========================
+// ✅ PROGRESSION — ROUTE AJOUTÉE
+// ========================
+router.get("/:id/progress", requireAuth, courseController.getCourseProgressForUser);
+
+// ========================
 // ✅ LEÇONS (INSCRIT)
 // ========================
 router.get("/:id/lessons/:lessonId", requireAuth, requireEnrollment, courseController.getLesson);
 router.patch("/:id/lessons/:lessonId/status", requireAuth, requireEnrollment, courseController.updateLessonStatus);
+
+// ✅ MARQUER LEÇON TERMINÉE — ROUTE AJOUTÉE
+router.post("/:id/lessons/:lessonId/complete", requireAuth, requireEnrollment, courseController.completeLesson);
 
 // ========================
 // ✅ GESTION DES COURS (INSTRUCTEUR/ADMIN)

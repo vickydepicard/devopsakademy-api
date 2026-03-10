@@ -39,17 +39,10 @@ export const requireAuth = async (
     );
 
     if (!userRow) {
-      return res.status(401).json({
-        success: false,
-        message: "Utilisateur introuvable.",
-      });
+      return res.status(401).json({ success: false, message: "Utilisateur introuvable." });
     }
-
     if (!userRow.is_active) {
-      return res.status(403).json({
-        success: false,
-        message: "Compte désactivé.",
-      });
+      return res.status(403).json({ success: false, message: "Compte désactivé." });
     }
 
     req.user = {
@@ -71,14 +64,17 @@ export const requireAuth = async (
 };
 
 // ================= INSCRIT À UN COURS =================
+// FIX : les routes utilisent :id (ex: /courses/:id/modules)
+//       et non :courseId — on résout les deux cas
 export const requireEnrollment = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const { courseId } = req.params;
-    const userId = req.user?.id;
+    // ✅ Compatibilité :id ET :courseId selon la route
+    const courseId = req.params.id ?? req.params.courseId;
+    const userId   = req.user?.id;
 
     if (!userId) {
       return res.status(401).json({
@@ -88,9 +84,30 @@ export const requireEnrollment = async (
       });
     }
 
-    // Vérifier l'inscription
+    if (!courseId) {
+      return res.status(400).json({
+        success: false,
+        message: "ID du cours manquant.",
+      });
+    }
+
+    // Admins et instructeurs du cours ont toujours accès
+    if (req.user?.role === "admin") return next();
+
+    if (req.user?.role === "instructor") {
+      const [ownedCourse]: any = await query(
+        "SELECT id FROM courses WHERE id = ? AND instructor_id = ?",
+        [courseId, userId]
+      );
+      if (ownedCourse) return next();
+    }
+
+    // Vérifier l'inscription (is_approved = 1 obligatoire pour les payants,
+    // les cours gratuits sont approuvés automatiquement à l'inscription)
     const [enrollment]: any = await query(
-      "SELECT * FROM course_enrollments WHERE user_id = ? AND course_id = ?",
+      `SELECT id, is_approved, payment_status
+       FROM course_enrollments
+       WHERE user_id = ? AND course_id = ?`,
       [userId, courseId]
     );
 
@@ -98,13 +115,22 @@ export const requireEnrollment = async (
       return res.status(403).json({
         success: false,
         message: "Vous devez être inscrit à ce cours pour y accéder.",
-        redirectTo: `/api/courses/${courseId}`,
+        redirectTo: `/courses/${courseId}`,
+      });
+    }
+
+    if (!enrollment.is_approved) {
+      return res.status(403).json({
+        success: false,
+        message: "Votre inscription est en attente de validation.",
+        redirectTo: `/courses/${courseId}`,
+        enrollment_status: enrollment.payment_status,
       });
     }
 
     next();
   } catch (error) {
-    console.error("Erreur vérification inscription:", error);
+    console.error("requireEnrollment error:", error);
     return res.status(500).json({
       success: false,
       message: "Erreur lors de la vérification de l'inscription.",
@@ -119,19 +145,11 @@ export const requireAdmin = (
   next: NextFunction
 ) => {
   if (!req.user) {
-    return res.status(401).json({
-      success: false,
-      message: "Veuillez vous connecter.",
-    });
+    return res.status(401).json({ success: false, message: "Veuillez vous connecter." });
   }
-
   if (req.user.role !== "admin") {
-    return res.status(403).json({
-      success: false,
-      message: "Accès réservé aux administrateurs.",
-    });
+    return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs." });
   }
-
   next();
 };
 
@@ -142,18 +160,10 @@ export const requireInstructorOrAdmin = (
   next: NextFunction
 ) => {
   if (!req.user) {
-    return res.status(401).json({
-      success: false,
-      message: "Veuillez vous connecter.",
-    });
+    return res.status(401).json({ success: false, message: "Veuillez vous connecter." });
   }
-
   if (req.user.role !== "instructor" && req.user.role !== "admin") {
-    return res.status(403).json({
-      success: false,
-      message: "Accès réservé aux instructeurs ou administrateurs.",
-    });
+    return res.status(403).json({ success: false, message: "Accès réservé aux instructeurs ou administrateurs." });
   }
-
   next();
 };
