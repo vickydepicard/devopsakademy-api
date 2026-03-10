@@ -63,10 +63,10 @@ export const register = async (req: Request, res: Response) => {
 
     const userId = Number(insertResult.insertId);
 
-    await query(
-      "INSERT INTO user_profiles (user_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
-      [userId]
-    );
+await query(
+  "INSERT IGNORE INTO user_profiles (user_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
+  [userId]
+);
 
     const accessToken = signAccessToken({ id: userId, role });
     const refreshToken = signRefreshToken({ id: userId, role });
