@@ -285,7 +285,10 @@ export const getCourseStats = async (req: AuthenticatedRequest, res: Response) =
 export const getAllCoursesAdmin = async (req: Request, res: Response) => {
   try {
     const courses = await query(`
-      SELECT c.*, u.first_name, u.last_name, cat.name AS category_name
+      SELECT c.*,
+             u.first_name, u.last_name,
+             CONCAT(u.first_name, ' ', u.last_name) AS instructor_name,
+             cat.name AS category_name
       FROM courses c
       LEFT JOIN users u ON c.instructor_id = u.id
       LEFT JOIN course_categories cat ON c.category_id = cat.id
@@ -884,5 +887,44 @@ export const getUserByIdAdmin = async (req: Request, res: Response) => {
   } catch (err) {
     console.error("💥 getUserByIdAdmin error:", err);
     return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *           ✏️  UPDATE / DELETE LEÇON (admin)
+ * ============================================================ */
+export const updateLesson = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title, content_type, content_url, article_content, duration_minutes, order_index, is_published, is_preview } = req.body;
+    await query(
+      `UPDATE lessons SET
+         title=?, content_type=?, content_url=?, article_content=?,
+         duration_minutes=?, order_index=?, is_published=?, is_preview=?,
+         updated_at=NOW()
+       WHERE id=?`,
+      [
+        title, content_type || "video", content_url || null,
+        article_content || null, duration_minutes || 0,
+        order_index || 0, is_published ? 1 : 0, is_preview ? 1 : 0, id
+      ]
+    );
+    res.json({ success: true, message: "✅ Leçon mise à jour" });
+  } catch (err) {
+    console.error("💥 updateLesson error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+export const deleteLesson = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await query("DELETE FROM lesson_progress WHERE lesson_id = ?", [id]);
+    await query("DELETE FROM lesson_resources WHERE lesson_id = ?", [id]);
+    await query("DELETE FROM lessons WHERE id = ?", [id]);
+    res.json({ success: true, message: "🗑️ Leçon supprimée" });
+  } catch (err) {
+    console.error("💥 deleteLesson error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 };

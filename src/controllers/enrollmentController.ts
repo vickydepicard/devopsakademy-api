@@ -3,9 +3,7 @@ import { Request, Response } from 'express'
 import { query } from '../config/database'
 import { AuthenticatedRequest } from '../middleware/auth'
 
-// ─────────────────────────────────────────────
-// POST /api/enrollments  — s'inscrire
-// ─────────────────────────────────────────────
+// POST /api/enrollments
 export const enroll = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
@@ -49,13 +47,9 @@ export const enroll = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
   }
 }
-
-// Alias pour compatibilité ancien code
 export const enrollInCourse = enroll
 
-// ─────────────────────────────────────────────
-// DELETE /api/enrollments/:id  — se désinscrire
-// ─────────────────────────────────────────────
+// DELETE /api/enrollments/:id
 export const unenrollFromCourse = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
@@ -77,9 +71,10 @@ export const unenrollFromCourse = async (req: Request, res: Response) => {
   }
 }
 
-// ─────────────────────────────────────────────
-// GET /api/enrollments/me  — mes inscriptions
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// GET /api/enrollments/me
+// ✅ Inclut total_lessons + completed_lessons calculés en live
+// ─────────────────────────────────────────────────────────────
 export const getMyEnrollments = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
@@ -88,34 +83,79 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
 
     const enrollments: any[] = await query(
       `SELECT
-         ce.id, ce.course_id, ce.enrollment_type,
-         ce.payment_status, ce.payment_proof_url,
-         ce.is_approved, ce.approved_at,
-         ce.completion_percentage, ce.last_accessed_at,
-         ce.completed_at, ce.enrolled_at, ce.is_favorite,
-         c.title, c.slug, c.thumbnail_url, c.level,
-         c.duration_hours, c.price, c.is_free,
-         cat.name AS category_name
+         ce.id,
+         ce.course_id,
+         ce.enrollment_type,
+         ce.payment_status,
+         ce.payment_proof_url,
+         ce.is_approved,
+         ce.approved_at,
+         ce.completion_percentage,
+         ce.last_accessed_at,
+         ce.completed_at,
+         ce.enrolled_at,
+         ce.is_favorite,
+         c.title,
+         c.slug,
+         c.thumbnail_url,
+         c.level,
+         c.duration_hours,
+         c.price,
+         c.is_free,
+         cat.name AS category_name,
+
+         -- ✅ Nombre total de leçons dans ce cours
+         (
+           SELECT COUNT(l.id)
+           FROM lessons l
+           INNER JOIN modules m ON l.module_id = m.id
+           WHERE m.course_id = c.id
+         ) AS total_lessons,
+
+         -- ✅ Nombre de leçons complétées par l'étudiant
+         (
+           SELECT COUNT(lp.id)
+           FROM lesson_progress lp
+           INNER JOIN lessons l ON lp.lesson_id = l.id
+           INNER JOIN modules m ON l.module_id = m.id
+           WHERE m.course_id = c.id
+             AND lp.user_id = ce.user_id
+         ) AS completed_lessons
+
        FROM course_enrollments ce
-       JOIN courses c ON c.id = ce.course_id
+       INNER JOIN courses c ON c.id = ce.course_id
        LEFT JOIN course_categories cat ON cat.id = c.category_id
        WHERE ce.user_id = ?
-       ORDER BY ce.enrolled_at DESC`,
+       ORDER BY
+         ce.last_accessed_at DESC,
+         ce.enrolled_at DESC`,
       [userId]
     )
-    return res.json({ success: true, data: enrollments })
+
+    // Recalculer completion_percentage depuis les vraies leçons
+    const enriched = enrollments.map(e => {
+      const total     = Number(e.total_lessons)     || 0
+      const completed = Number(e.completed_lessons) || 0
+      const pct = total > 0
+        ? Math.round((completed / total) * 100)
+        : Number(e.completion_percentage) || 0
+      return {
+        ...e,
+        total_lessons:        total,
+        completed_lessons:    completed,
+        completion_percentage: pct,
+      }
+    })
+
+    return res.json({ success: true, data: enriched })
   } catch (error) {
     console.error('getMyEnrollments error:', error)
     return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
   }
 }
-
-// Alias pour compatibilité ancien code
 export const getUserEnrollments = getMyEnrollments
 
-// ─────────────────────────────────────────────
 // GET /api/enrollments/status/:courseId
-// ─────────────────────────────────────────────
 export const getEnrollmentStatus = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
@@ -133,14 +173,10 @@ export const getEnrollmentStatus = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
   }
 }
+export const checkEnrollment      = getEnrollmentStatus
+export const getEnrollmentDetails  = getEnrollmentStatus
 
-// Alias pour compatibilité ancien code
-export const checkEnrollment     = getEnrollmentStatus
-export const getEnrollmentDetails = getEnrollmentStatus
-
-// ─────────────────────────────────────────────
-// POST /api/enrollments/:enrollmentId/payment  — soumettre preuve
-// ─────────────────────────────────────────────
+// POST /api/enrollments/:courseId/upload-proof
 export const submitPayment = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
@@ -195,13 +231,9 @@ export const submitPayment = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
   }
 }
-
-// Alias pour compatibilité ancien code
 export const uploadPaymentProof = submitPayment
 
-// ─────────────────────────────────────────────
-// GET /api/enrollments/course/:courseId/students  (instructor/admin)
-// ─────────────────────────────────────────────
+// GET /api/enrollments/:courseId/students
 export const getCourseStudents = async (req: Request, res: Response) => {
   try {
     const courseId = Number(req.params.courseId)
@@ -221,9 +253,7 @@ export const getCourseStudents = async (req: Request, res: Response) => {
   }
 }
 
-// ─────────────────────────────────────────────
-// GET /api/enrollments  (admin) — toutes les inscriptions
-// ─────────────────────────────────────────────
+// GET /api/enrollments  (admin)
 export const getAllEnrollments = async (req: Request, res: Response) => {
   try {
     const rows: any[] = await query(
@@ -241,19 +271,13 @@ export const getAllEnrollments = async (req: Request, res: Response) => {
   }
 }
 
-// ─────────────────────────────────────────────
-// PUT /api/enrollments/:id/validate  (admin)
-// ─────────────────────────────────────────────
+// PATCH /api/enrollments/:id/validate  (admin)
 export const validateEnrollment = async (req: Request, res: Response) => {
   try {
-    const authReq = req as AuthenticatedRequest
     const enrollmentId = Number(req.params.id)
-    const { approved } = req.body // true | false
-
+    const { approved } = req.body
     await query(
-      `UPDATE course_enrollments
-       SET is_approved = ?, payment_status = ?, approved_at = NOW()
-       WHERE id = ?`,
+      `UPDATE course_enrollments SET is_approved = ?, payment_status = ?, approved_at = NOW() WHERE id = ?`,
       [approved ? 1 : 0, approved ? 'verified' : 'rejected', enrollmentId]
     )
     return res.json({ success: true, message: approved ? 'Inscription approuvée' : 'Inscription rejetée' })
@@ -262,14 +286,10 @@ export const validateEnrollment = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
   }
 }
-
-// Alias pour compatibilité ancien code
-export const validatePayment       = validateEnrollment
+export const validatePayment        = validateEnrollment
 export const adminApproveEnrollment = validateEnrollment
 
-// ─────────────────────────────────────────────
 // DELETE /api/enrollments/:id  (admin)
-// ─────────────────────────────────────────────
 export const adminDeleteEnrollment = async (req: Request, res: Response) => {
   try {
     const enrollmentId = Number(req.params.id)

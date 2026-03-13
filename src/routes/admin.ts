@@ -42,6 +42,8 @@ import {
   getLessonsByModule,
   createLesson,
   addLessonResource,
+  updateLesson,
+  deleteLesson,
   getAllInstructors,
   createInstructor,
   updateInstructor,
@@ -85,13 +87,17 @@ router.get("/users/:id", getUserByIdAdmin);
 
 /**
  * =============================
- * 📚 COURS DE BASE
+ * 📚 COURS
  * =============================
  */
-router.get("/courses", getAllCourses);
-router.post("/courses", createCourse);
-router.put("/courses/:courseId", updateCourse);
-router.delete("/courses/:courseId", deleteCourse);
+router.get("/courses", getAllCoursesAdmin);
+router.post("/courses", createCourseAdmin);
+router.patch("/courses/:id", updateCourseAdmin);
+router.put("/courses/:courseId", updateCourseAdmin);
+router.delete("/courses/:id", deleteCourseAdmin);
+router.delete("/courses/:courseId", deleteCourseAdmin);
+router.get("/courses/:id", getCourseByIdAdmin);
+router.patch("/courses/:id/publish", publishCourseAdmin);
 
 /**
  * =============================
@@ -130,14 +136,6 @@ router.post("/categories", createCategory);
 router.patch("/categories/:id", updateCategory);
 router.delete("/categories/:id", deleteCategory);
 
-// Cours
-router.get("/courses", getAllCoursesAdmin);
-router.post("/courses", createCourseAdmin);
-router.patch("/courses/:id", updateCourseAdmin);
-router.delete("/courses/:id", deleteCourseAdmin);
-router.get("/courses/:id", getCourseByIdAdmin);
-router.patch("/courses/:id/publish", publishCourseAdmin);
-
 // Modules
 router.get("/courses/:courseId/modules", getModulesByCourse);
 router.post("/modules", createModule);
@@ -147,6 +145,8 @@ router.delete("/modules/:id", deleteModule);
 // Leçons
 router.get("/modules/:moduleId/lessons", getLessonsByModule);
 router.post("/lessons", createLesson);
+router.patch("/lessons/:id", updateLesson);
+router.delete("/lessons/:id", deleteLesson);
 router.post("/lessons/resources", addLessonResource);
 
 router.get("/instructors", getAllInstructors);
