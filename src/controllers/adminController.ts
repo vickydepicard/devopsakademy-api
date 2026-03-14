@@ -7,6 +7,25 @@ import { AuthenticatedRequest } from "../middleware/auth";
  * ============================================================ */
 const toNumber = (v: any) => (typeof v === "bigint" ? Number(v) : v);
 
+/**
+ * Convertit recursivement tous les BigInt en Number.
+ * Necessaire car MariaDB retourne COUNT() / BIGINT en BigInt JS
+ * incompatible avec JSON.stringify (Express res.json).
+ */
+const sanitizeBigInt = (data: any): any => {
+  if (Array.isArray(data)) return data.map(sanitizeBigInt);
+  if (data !== null && typeof data === "object") {
+    const out: any = {};
+    for (const k of Object.keys(data)) {
+      out[k] = typeof data[k] === "bigint"
+        ? Number(data[k])
+        : sanitizeBigInt(data[k]);
+    }
+    return out;
+  }
+  return typeof data === "bigint" ? Number(data) : data;
+};
+
 /* ============================================================
  *                    👥 UTILISATEURS
  * ============================================================ */
@@ -294,7 +313,7 @@ export const getAllCoursesAdmin = async (req: Request, res: Response) => {
       LEFT JOIN course_categories cat ON c.category_id = cat.id
       ORDER BY c.created_at DESC
     `);
-    res.json({ success: true, data: courses });
+    res.json({ success: true, data: sanitizeBigInt(courses) });
   } catch (err) {
     console.error("💥 getAllCoursesAdmin error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -508,7 +527,7 @@ export const getCourseByIdAdmin = async (req: Request, res: Response) => {
     // 📚 Récupération des modules et leçons liés à ce cours
     const modules = await query(
       `SELECT m.id, m.title, COUNT(l.id) AS lessons_count
-       FROM course_modules m
+       FROM modules m
        LEFT JOIN lessons l ON l.module_id = m.id
        WHERE m.course_id = ?
        GROUP BY m.id, m.title
@@ -528,11 +547,7 @@ export const getCourseByIdAdmin = async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      data: {
-        ...course,
-        modules,
-        students,
-      },
+      data: sanitizeBigInt({ ...course, modules, students }),
     });
   } catch (err) {
     console.error("💥 getCourseByIdAdmin error:", err);
@@ -556,7 +571,7 @@ export const getLessonsByModule = async (req: Request, res: Response) => {
        ORDER BY l.order_index ASC`,
       [moduleId]
     );
-    res.json({ success: true, data: lessons });
+    res.json({ success: true, data: sanitizeBigInt(lessons) });
   } catch (err) {
     console.error("💥 getLessonsByModule error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -605,14 +620,14 @@ export const getModulesByCourse = async (req: Request, res: Response) => {
     const { courseId } = req.params;
     const modules = await query(
       `SELECT m.*, COUNT(l.id) AS lesson_count
-       FROM course_modules m
+       FROM modules m
        LEFT JOIN lessons l ON l.module_id = m.id
        WHERE m.course_id = ?
        GROUP BY m.id
        ORDER BY m.order_index ASC`,
       [courseId]
     );
-    res.json({ success: true, data: modules });
+    res.json({ success: true, data: sanitizeBigInt(modules) });
   } catch (err) {
     console.error("💥 getModulesByCourse error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -626,7 +641,7 @@ export const createModule = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Champs requis manquants" });
 
     await query(
-      `INSERT INTO course_modules (course_id, title, description, order_index, created_at)
+      `INSERT INTO modules (course_id, title, description, order_index, created_at)
        VALUES (?, ?, ?, ?, NOW())`,
       [course_id, title, description || "", order_index || 0]
     );
@@ -642,7 +657,7 @@ export const updateModule = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { title, description, order_index } = req.body;
     await query(
-      `UPDATE course_modules SET title=?, description=?, order_index=?, updated_at=NOW() WHERE id=?`,
+      `UPDATE modules SET title=?, description=?, order_index=?, updated_at=NOW() WHERE id=?`,
       [title, description, order_index || 0, id]
     );
     res.json({ success: true, message: "✅ Module mis à jour" });
@@ -654,7 +669,7 @@ export const updateModule = async (req: Request, res: Response) => {
 
 export const deleteModule = async (req: Request, res: Response) => {
   try {
-    await query("DELETE FROM course_modules WHERE id=?", [req.params.id]);
+    await query("DELETE FROM modules WHERE id=?", [req.params.id]);
     res.json({ success: true, message: "🗑️ Module supprimé" });
   } catch (err) {
     console.error("💥 deleteModule error:", err);
@@ -926,5 +941,378 @@ export const deleteLesson = async (req: Request, res: Response) => {
   } catch (err) {
     console.error("💥 deleteLesson error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *    📎 RESSOURCES DE LEÇONS (GET + UPDATE + DELETE)
+ * ============================================================ */
+export const getLessonResources = async (req: Request, res: Response) => {
+  try {
+    const { lessonId } = req.params;
+    const resources = await query(
+      `SELECT * FROM lesson_resources WHERE lesson_id = ? ORDER BY order_index ASC, created_at ASC`,
+      [lessonId]
+    );
+    res.json({ success: true, data: resources });
+  } catch (err) {
+    console.error("💥 getLessonResources error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+export const updateLessonResource = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title, file_url, file_type, file_size, order_index } = req.body;
+    await query(
+      `UPDATE lesson_resources SET title=?, file_url=?, file_type=?, file_size=?, order_index=? WHERE id=?`,
+      [title, file_url, file_type || null, file_size || null, order_index || 0, id]
+    );
+    res.json({ success: true, message: "✅ Ressource mise à jour" });
+  } catch (err) {
+    console.error("💥 updateLessonResource error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+export const deleteLessonResource = async (req: Request, res: Response) => {
+  try {
+    await query("DELETE FROM lesson_resources WHERE id=?", [req.params.id]);
+    res.json({ success: true, message: "🗑️ Ressource supprimée" });
+  } catch (err) {
+    console.error("💥 deleteLessonResource error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *    🔄 UPDATE MODULE — champs complets (is_published inclus)
+ * ============================================================ */
+export const updateModuleFull = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title, description, order_index, is_published } = req.body;
+    await query(
+      `UPDATE modules SET title=?, description=?, order_index=?, is_published=?, updated_at=NOW() WHERE id=?`,
+      [title, description || "", order_index || 0, is_published ? 1 : 0, id]
+    );
+    res.json({ success: true, message: "✅ Module mis à jour" });
+  } catch (err) {
+    console.error("💥 updateModuleFull error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *    📚 CREER LEÇON — champs complets avec slug auto
+ * ============================================================ */
+export const createLessonFull = async (req: Request, res: Response) => {
+  try {
+    const {
+      module_id, title, content_type, content_url, article_content,
+      duration_minutes, order_index, is_published, is_preview,
+      requires_completion, is_downloadable
+    } = req.body;
+
+    if (!module_id || !title)
+      return res.status(400).json({ success: false, message: "module_id et title requis" });
+
+    // Auto-générer un slug unique
+    const slug = title
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 80) + "-" + Date.now();
+
+    await query(
+      `INSERT INTO lessons
+         (module_id, title, slug, content_type, content_url, article_content,
+          duration_minutes, order_index, is_published, is_preview,
+          requires_completion, is_downloadable, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        module_id, title, slug,
+        content_type || "video", content_url || null, article_content || null,
+        duration_minutes || 0, order_index || 0,
+        is_published !== false ? 1 : 0,
+        is_preview ? 1 : 0,
+        requires_completion !== false ? 1 : 0,
+        is_downloadable ? 1 : 0,
+      ]
+    );
+    res.json({ success: true, message: "✅ Leçon créée" });
+  } catch (err) {
+    console.error("💥 createLessonFull error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *    ✏️ UPDATE LEÇON — champs complets
+ * ============================================================ */
+export const updateLessonFull = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const {
+      title, content_type, content_url, article_content,
+      duration_minutes, order_index, is_published, is_preview,
+      requires_completion, is_downloadable
+    } = req.body;
+    await query(
+      `UPDATE lessons SET
+         title=?, content_type=?, content_url=?, article_content=?,
+         duration_minutes=?, order_index=?, is_published=?, is_preview=?,
+         requires_completion=?, is_downloadable=?, updated_at=NOW()
+       WHERE id=?`,
+      [
+        title, content_type || "video", content_url || null, article_content || null,
+        duration_minutes || 0, order_index || 0,
+        is_published !== false ? 1 : 0,
+        is_preview ? 1 : 0,
+        requires_completion !== false ? 1 : 0,
+        is_downloadable ? 1 : 0,
+        id
+      ]
+    );
+    res.json({ success: true, message: "✅ Leçon mise à jour" });
+  } catch (err) {
+    console.error("💥 updateLessonFull error:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+/* ============================================================
+ *   📤 UPLOAD FICHIERS (Multer — vidéos, PDFs, ressources)
+ * ============================================================ */
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+const createUploadDir = (dir: string) => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+};
+
+// Storage vidéos leçons
+const videoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    const dir = "uploads/lessons/videos";
+    createUploadDir(dir);
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext  = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext)
+      .toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 40);
+    cb(null, `${name}-${Date.now()}${ext}`);
+  },
+});
+
+// Storage ressources (PDFs, slides, ZIP…)
+const resourceStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    const dir = "uploads/lessons/resources";
+    createUploadDir(dir);
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext  = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext)
+      .toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 40);
+    cb(null, `${name}-${Date.now()}${ext}`);
+  },
+});
+
+// Storage thumbnails cours
+const thumbStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    const dir = "uploads/courses/thumbnails";
+    createUploadDir(dir);
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext  = path.extname(file.originalname);
+    cb(null, `thumb-${Date.now()}${ext}`);
+  },
+});
+
+export const uploadVideo = multer({
+  storage: videoStorage,
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2 Go
+  fileFilter: (_req, file, cb) => {
+    const ok = /^video\//i.test(file.mimetype);
+    ok ? cb(null, true) : cb(new Error("Seuls les fichiers vidéo sont acceptés"));
+  },
+});
+
+export const uploadResource = multer({
+  storage: resourceStorage,
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200 Mo
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      "application/pdf",
+      "application/zip","application/x-zip-compressed",
+      "application/vnd.ms-powerpoint",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "text/plain","text/markdown",
+      "application/json",
+      "image/jpeg","image/png","image/gif","image/webp","image/svg+xml",
+    ];
+    const ok = allowed.includes(file.mimetype) || /^video\//.test(file.mimetype);
+    ok ? cb(null, true) : cb(new Error(`Type non supporté: ${file.mimetype}`));
+  },
+});
+
+export const uploadThumb = multer({
+  storage: thumbStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 Mo
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\//i.test(file.mimetype);
+    ok ? cb(null, true) : cb(new Error("Image requise"));
+  },
+});
+
+/* ─── Uploader une vidéo pour une leçon ─── */
+export const uploadLessonVideo = async (req: Request, res: Response) => {
+  try {
+    const { lessonId } = req.params;
+    if (!req.file) return res.status(400).json({ success:false, message:"Aucun fichier reçu" });
+
+    const baseUrl   = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const fileUrl   = `${baseUrl}/uploads/lessons/videos/${req.file.filename}`;
+    const fileSize  = req.file.size;
+
+    // Mettre à jour content_url de la leçon
+    await query(
+      `UPDATE lessons SET content_url=?, content_type='video', updated_at=NOW() WHERE id=?`,
+      [fileUrl, lessonId]
+    );
+
+    res.json({
+      success: true,
+      message: "✅ Vidéo uploadée et associée à la leçon",
+      data: {
+        file_url:      fileUrl,
+        filename:      req.file.filename,
+        original_name: req.file.originalname,
+        size_bytes:    fileSize,
+        size_mb:       (fileSize / 1024 / 1024).toFixed(2),
+      },
+    });
+  } catch (err) {
+    console.error("💥 uploadLessonVideo error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
+  }
+};
+
+/* ─── Uploader un fichier comme ressource de leçon ─── */
+export const uploadLessonResource = async (req: Request, res: Response) => {
+  try {
+    const { lessonId } = req.params;
+    if (!req.file) return res.status(400).json({ success:false, message:"Aucun fichier reçu" });
+
+    const baseUrl  = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const fileUrl  = `${baseUrl}/uploads/lessons/resources/${req.file.filename}`;
+    const fileSize = req.file.size;
+    const fileType = path.extname(req.file.originalname).slice(1).toLowerCase();
+    const title    = (req.body.title || req.file.originalname).slice(0, 255);
+
+    await query(
+      `INSERT INTO lesson_resources (lesson_id, title, file_url, file_type, file_size, order_index, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, NOW())`,
+      [lessonId, title, fileUrl, fileType, fileSize]
+    );
+
+    res.json({
+      success: true,
+      message: "✅ Ressource ajoutée",
+      data: { file_url:fileUrl, file_type:fileType, size_mb:(fileSize/1024/1024).toFixed(2) },
+    });
+  } catch (err) {
+    console.error("💥 uploadLessonResource error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
+  }
+};
+
+/* ─── Uploader une miniature de cours ─── */
+export const uploadCourseThumbnail = async (req: Request, res: Response) => {
+  try {
+    const { courseId } = req.params;
+    if (!req.file) return res.status(400).json({ success:false, message:"Aucune image reçue" });
+
+    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const fileUrl = `${baseUrl}/uploads/courses/thumbnails/${req.file.filename}`;
+
+    await query(`UPDATE courses SET thumbnail_url=?, updated_at=NOW() WHERE id=?`, [fileUrl, courseId]);
+
+    res.json({ success:true, message:"✅ Miniature mise à jour", data:{ file_url:fileUrl } });
+  } catch (err) {
+    console.error("💥 uploadCourseThumbnail error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
+  }
+};
+
+/* ─── Publier / Dépublier un MODULE ─── */
+export const toggleModulePublish = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { is_published } = req.body;
+    await query(
+      `UPDATE modules SET is_published=?, updated_at=NOW() WHERE id=?`,
+      [is_published ? 1 : 0, id]
+    );
+    res.json({
+      success: true,
+      message: is_published ? "✅ Module publié" : "📦 Module dépublié",
+    });
+  } catch (err) {
+    console.error("💥 toggleModulePublish error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
+  }
+};
+
+/* ─── Publier / Dépublier une LEÇON ─── */
+export const toggleLessonPublish = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { is_published } = req.body;
+    await query(
+      `UPDATE lessons SET is_published=?, updated_at=NOW() WHERE id=?`,
+      [is_published ? 1 : 0, id]
+    );
+    res.json({
+      success: true,
+      message: is_published ? "✅ Leçon publiée" : "📦 Leçon dépubliée",
+    });
+  } catch (err) {
+    console.error("💥 toggleLessonPublish error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
+  }
+};
+
+/* ─── Supprimer un fichier uploadé du disque ─── */
+export const deleteUploadedFile = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const [resource] = await query(`SELECT * FROM lesson_resources WHERE id=?`, [id]);
+    if (!resource) return res.status(404).json({ success:false, message:"Ressource introuvable" });
+
+    // Supprimer le fichier local si c'est un upload local
+    const fileUrl: string = resource.file_url || "";
+    if (fileUrl.includes("/uploads/")) {
+      const localPath = fileUrl.replace(/^https?:\/\/[^\/]+/, "");
+      if (fs.existsSync("." + localPath)) fs.unlinkSync("." + localPath);
+    }
+
+    await query(`DELETE FROM lesson_resources WHERE id=?`, [id]);
+    res.json({ success:true, message:"🗑️ Ressource supprimée" });
+  } catch (err) {
+    console.error("💥 deleteUploadedFile error:", err);
+    res.status(500).json({ success:false, message:"Erreur serveur" });
   }
 };

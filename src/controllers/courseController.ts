@@ -483,6 +483,7 @@ export const getCourseModules = async (req: Request, res: Response) => {
       const lessons: any[] = await query(
         `SELECT
            l.id, l.title, l.slug, l.content_type, l.content_url,
+           l.article_content, l.is_downloadable,
            l.duration_minutes, l.order_index, l.is_preview, l.requires_completion,
            COALESCE(lp.is_completed, 0)           AS is_completed,
            COALESCE(lp.status,       'not_started') AS status
@@ -546,7 +547,9 @@ export const getCourseProgressForUser = async (req: Request, res: Response) => {
     for (const mod of progress) {
       const lessons: any[] = await query(
         `SELECT
-           l.id, l.title, l.duration_minutes, l.order_index, l.content_type,
+           l.id, l.title, l.content_type, l.content_url,
+           l.article_content, l.is_downloadable, l.is_preview,
+           l.duration_minutes, l.order_index,
            COALESCE(lp.is_completed, 0)           AS completed,
            COALESCE(lp.status,       'not_started') AS status
          FROM lessons l
