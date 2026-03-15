@@ -68,6 +68,19 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
+
+// ✅ Résoudre un courseId depuis un slug ou un ID numérique
+async function resolveCourseId(raw: string): Promise<number | null> {
+  const num = Number(raw);
+  if (!isNaN(num) && Number.isInteger(num)) return num;
+  // C'est un slug — chercher l'ID dans la BDD
+  const [row]: any[] = await query(
+    "SELECT id FROM courses WHERE slug = ? AND is_published = 1 LIMIT 1",
+    [raw]
+  );
+  return row ? Number(row.id) : null;
+}
+
 // GET ALL COURSES (avec filtres + pagination)
 // GET /api/courses
 // ═════════════════════════════════════════════════════════════════════════════
@@ -162,17 +175,22 @@ export const getUserCourses = async (req: AuthenticatedRequest, res: Response) =
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// GET COURSE BY ID — Version publique (visiteurs)
-// GET /api/courses/:id
+// GET COURSE BY ID ou SLUG — Version publique (visiteurs)
+// GET /api/courses/:id  — accepte un ID numérique OU un slug texte
 // ═════════════════════════════════════════════════════════════════════════════
 export const getCourseById = async (req: Request, res: Response) => {
   try {
-    const courseId = Number(req.params.id);
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    const raw = req.params.id;
+    const courseId = Number(raw);
+    const isSlug = isNaN(courseId) || !Number.isInteger(courseId);
+
+    // Construire la condition WHERE selon type (id ou slug)
+    const whereClause = isSlug ? "c.slug = ?" : "c.id = ?";
+    const whereValue  = isSlug ? raw : courseId;
 
     const [course]: any = await query(
       `SELECT
-         c.id, c.title, c.description, c.short_description,
+         c.id, c.slug, c.title, c.description, c.short_description,
          c.thumbnail_url, c.video_preview_url, c.price, c.original_price,
          c.is_free, c.level, c.language, c.is_featured, c.is_published,
          c.rating, c.review_count, c.duration_hours, c.student_count,
@@ -183,8 +201,8 @@ export const getCourseById = async (req: Request, res: Response) => {
        FROM courses c
        LEFT JOIN users u               ON c.instructor_id = u.id
        LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       WHERE c.id = ? AND c.is_published = 1`,
-      [courseId]
+       WHERE ${whereClause} AND c.is_published = 1`,
+      [whereValue]
     );
     if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
 
@@ -221,9 +239,12 @@ export const getCourseById = async (req: Request, res: Response) => {
 // ═════════════════════════════════════════════════════════════════════════════
 export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const courseId = Number(req.params.id);
+    const raw = req.params.id;
+    const courseId = Number(raw);
     const user     = req.user;
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    const isSlug = isNaN(courseId) || !Number.isInteger(courseId);
+    const whereClause = isSlug ? "c.slug = ?" : "c.id = ?";
+    const whereValue  = isSlug ? raw : courseId;
 
     const [course]: any = await query(
       `SELECT
@@ -238,8 +259,8 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
        FROM courses c
        LEFT JOIN users u               ON c.instructor_id = u.id
        LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       WHERE c.id = ?`,
-      [courseId]
+       ${whereClause}`,
+      [whereValue]
     );
     if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
 
@@ -465,8 +486,9 @@ export const getCourseContent = async (req: AuthenticatedRequest, res: Response)
 // ═════════════════════════════════════════════════════════════════════════════
 export const getCourseModules = async (req: Request, res: Response) => {
   try {
-    const courseId = Number(req.params.id);
+    const courseId = await resolveCourseId(req.params.id);
     const userId   = (req as any).user?.id || 0;
+    if (!courseId) return res.status(404).json({ success: false, message: "Cours introuvable" });
 
     const courses: any[] = await query(`SELECT id FROM courses WHERE id = ?`, [courseId]);
     if (!courses.length) return res.status(404).json({ success: false, message: "Cours introuvable" });
@@ -483,7 +505,6 @@ export const getCourseModules = async (req: Request, res: Response) => {
       const lessons: any[] = await query(
         `SELECT
            l.id, l.title, l.slug, l.content_type, l.content_url,
-           l.article_content, l.is_downloadable,
            l.duration_minutes, l.order_index, l.is_preview, l.requires_completion,
            COALESCE(lp.is_completed, 0)           AS is_completed,
            COALESCE(lp.status,       'not_started') AS status
@@ -513,9 +534,10 @@ export const getCourseModules = async (req: Request, res: Response) => {
 // ═════════════════════════════════════════════════════════════════════════════
 export const getCourseProgressForUser = async (req: Request, res: Response) => {
   try {
-    const courseId = Number(req.params.id);
+    const courseId = await resolveCourseId(req.params.id);
     const userId   = (req as any).user?.id;
     if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!courseId) return res.status(404).json({ success: false, message: "Cours introuvable" });
 
     const progress: any[] = await query(
       `SELECT
@@ -547,9 +569,7 @@ export const getCourseProgressForUser = async (req: Request, res: Response) => {
     for (const mod of progress) {
       const lessons: any[] = await query(
         `SELECT
-           l.id, l.title, l.content_type, l.content_url,
-           l.article_content, l.is_downloadable, l.is_preview,
-           l.duration_minutes, l.order_index,
+           l.id, l.title, l.duration_minutes, l.order_index, l.content_type,
            COALESCE(lp.is_completed, 0)           AS completed,
            COALESCE(lp.status,       'not_started') AS status
          FROM lessons l
