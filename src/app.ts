@@ -22,6 +22,7 @@ import testMailRoute        from "./routes/test-mail.route";
 import mailRoute            from "./routes/mail.route";
 import profileRoutes        from "./routes/Profileroutes";
 import certificateRoutes    from "./routes/certificate.routes"; // ✅ NOUVEAU
+import reviewRoutes          from "./routes/reviews.routes";       // ✅ Reviews
 
 // Middleware
 import { errorHandler }         from "./middleware/errorHandler";
@@ -52,11 +53,12 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: "10mb" }));
-
-// ── Servir les fichiers uploadés (vidéos, PDFs, ressources) ──
-app.use("/uploads", express.static("uploads"));
-
 app.use(express.urlencoded({ extended: true }));
+
+// ── Fichiers statiques uploadés (vidéos, PDFs, ressources cours) ──
+// IMPORTANT: avant les routes API pour que /uploads soit accessible
+import path from "path";
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
@@ -94,6 +96,7 @@ app.use("/api/test",         testMailRoute);
 app.use("/api/mails",        mailRoute);
 app.use("/api/profile",      profileRoutes);
 app.use("/api/certificates", certificateRoutes); // ✅ NOUVEAU
+app.use("/api/courses",      reviewRoutes);      // ✅ Reviews (POST/GET /:courseId/reviews)
 
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 

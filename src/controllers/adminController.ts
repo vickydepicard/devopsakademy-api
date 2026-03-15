@@ -32,7 +32,7 @@ const sanitizeBigInt = (data: any): any => {
 export const getAllUsers = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const users = await query(`
-      SELECT id, first_name, last_name, email, role, is_validated, created_at
+      SELECT id, first_name, last_name, email, role, created_at
       FROM users ORDER BY created_at DESC
     `);
     res.json({ success: true, data: users });
@@ -44,7 +44,7 @@ export const getAllUsers = async (req: AuthenticatedRequest, res: Response) => {
 
 export const validateUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    await query("UPDATE users SET is_validated = 1 WHERE id = ?", [req.params.userId]);
+    await query("UPDATE users SET is_active = 1 WHERE id = ?", [req.params.userId]);
     res.json({ success: true, message: "✅ Utilisateur validé" });
   } catch (err) {
     console.error("💥 validateUser error:", err);
@@ -59,8 +59,8 @@ export const createUser = async (req: AuthenticatedRequest, res: Response) => {
       return res.status(400).json({ success: false, message: "Champs requis manquants" });
 
     await query(
-      `INSERT INTO users (first_name, last_name, email, password, role, is_validated)
-       VALUES (?, ?, ?, ?, ?, 1)`,
+      `INSERT INTO users (first_name, last_name, email, password_hash, role, is_active, email_verified)
+       VALUES (?, ?, ?, ?, ?, 1, 0)`,
       [first_name, last_name, email, password, role || "student"]
     );
 
@@ -75,7 +75,7 @@ export const updateUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { first_name, last_name, role, is_validated } = req.body;
     await query(
-      `UPDATE users SET first_name=?, last_name=?, role=?, is_validated=? WHERE id=?`,
+      `UPDATE users SET first_name=?, last_name=?, role=?, is_active=? WHERE id=?`,
       [first_name, last_name, role, is_validated, req.params.userId]
     );
     res.json({ success: true, message: "✅ Utilisateur mis à jour" });
@@ -125,7 +125,7 @@ export const updateUserAdmin = async (req: Request, res: Response) => {
 
     await query(
       `UPDATE users
-       SET first_name=?, last_name=?, email=?, role=?, is_validated=?, updated_at=NOW()
+       SET first_name=?, last_name=?, email=?, role=?, is_active=?, updated_at=NOW()
        WHERE id=?`,
       [first_name, last_name, email, role, is_validated ? 1 : 0, id]
     );
@@ -393,45 +393,91 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const {
-      title,
-      slug,
-      description,
-      short_description,
-      instructor_id,
-      category_id,
-      price,
-      original_price,
-      duration_hours,
-      level,
-      language,
-      thumbnail_url,
-      video_preview_url,
-      is_published,
-      is_featured,
-      is_free,
-      requirements,
-      learning_outcomes,
-      requires_approval,
+      title, slug, description, short_description,
+      instructor_id, category_id, price, original_price, duration_hours,
+      level, language, thumbnail_url, video_preview_url,
+      is_published, is_featured, is_free, requirements, learning_outcomes,
+      requires_approval, is_subscription_included, is_forum_enabled,
+      sequential_mode, instructor_commission_rate,
     } = req.body;
 
+    if (!instructor_id) {
+      return res.status(400).json({ success: false, message: "instructor_id est requis" });
+    }
+
+    // ✅ requirements et learning_outcomes — éviter le double-encodage
+    const toJsonField = (val: any): string | null => {
+      if (!val) return null;
+      if (Array.isArray(val)) {
+        // Tableaux simples de strings → encoder une seule fois
+        return JSON.stringify(val.filter((v: any) => typeof v === "string" && v.trim()));
+      }
+      if (typeof val === "string") {
+        const trimmed = val.trim();
+        if (!trimmed) return null;
+        // Si c'est déjà du JSON valide (commence par [ ou {), le valider d'abord
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            // S'assurer que le contenu est un tableau de strings simples
+            if (Array.isArray(parsed)) {
+              const flattened = flattenStringArray(parsed);
+              return JSON.stringify(flattened);
+            }
+            return trimmed; // Déjà valide
+          } catch {
+            // Pas du JSON → traiter comme texte brut
+          }
+        }
+        // Texte brut avec sauts de ligne
+        return JSON.stringify(trimmed.split("\n").filter((s: string) => s.trim()));
+      }
+      return null;
+    };
+
+    // Aplatir un tableau potentiellement imbriqué de strings
+    const flattenStringArray = (arr: any[]): string[] => {
+      const result: string[] = [];
+      for (const item of arr) {
+        if (typeof item === "string") {
+          if (item.startsWith("[") || item.startsWith("{")) {
+            try { result.push(...flattenStringArray(JSON.parse(item))); continue; } catch {}
+          }
+          result.push(item);
+        } else if (Array.isArray(item)) {
+          result.push(...flattenStringArray(item));
+        }
+      }
+      return result;
+    };
+
+    const reqJson = toJsonField(requirements);
+    const loJson  = toJsonField(learning_outcomes);
+
+    const autoSlug = (title || "").toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
+
     await query(
-      `UPDATE courses 
-       SET title=?, slug=?, description=?, short_description=?, instructor_id=?, 
-           category_id=?, price=?, original_price=?, duration_hours=?, level=?, 
-           language=?, thumbnail_url=?, video_preview_url=?, is_published=?, 
-           is_featured=?, is_free=?, requirements=?, learning_outcomes=?, 
-           requires_approval=?, updated_at=NOW()
+      `UPDATE courses
+       SET title=?, slug=?, description=?, short_description=?,
+           instructor_id=?, category_id=?, price=?, original_price=?,
+           duration_hours=?, level=?, language=?, thumbnail_url=?,
+           video_preview_url=?, is_published=?, is_featured=?, is_free=?,
+           requirements=?, learning_outcomes=?, requires_approval=?,
+           is_subscription_included=?, is_forum_enabled=?, sequential_mode=?,
+           instructor_commission_rate=?, updated_at=NOW()
        WHERE id=?`,
       [
         title || null,
-        slug || title?.toLowerCase().replace(/\s+/g, "-") || null,
+        slug || autoSlug || null,
         description || null,
         short_description || null,
-        instructor_id || null,
-        category_id || null, // ✅ évite erreur de contrainte FK
-        price || 0,
-        original_price || null,
-        duration_hours || null,
+        instructor_id,
+        category_id || null,
+        Number(price) || 0,
+        original_price ? Number(original_price) : null,
+        duration_hours ? Number(duration_hours) : null,
         level || "beginner",
         language || "fr",
         thumbnail_url || null,
@@ -439,17 +485,21 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
         is_published ? 1 : 0,
         is_featured ? 1 : 0,
         is_free ? 1 : 0,
-        requirements || null,
-        learning_outcomes || null,
+        reqJson,
+        loJson,
         requires_approval ? 1 : 0,
+        is_subscription_included ? 1 : 0,
+        is_forum_enabled !== false ? 1 : 0,
+        sequential_mode ? 1 : 0,
+        instructor_commission_rate ? Number(instructor_commission_rate) : null,
         id,
       ]
     );
 
-    res.json({ success: true, message: "✅ Cours mis à jour avec succès (admin)" });
+    res.json({ success: true, message: "✅ Cours mis à jour avec succès" });
   } catch (err) {
     console.error("💥 updateCourseAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur lors de la mise à jour du cours" });
+    res.status(500).json({ success: false, message: "Erreur mise à jour: " + (err as any)?.message });
   }
 };
 
@@ -744,13 +794,15 @@ export const deleteCategory = async (req: Request, res: Response) => {
  * ============================================================ */
 export const getAllInstructors = async (req: Request, res: Response) => {
   try {
+    // ✅ Uniquement les colonnes qui existent dans la table users
     const instructors = await query(`
-      SELECT id, first_name, last_name, email, bio, avatar_url, is_validated, created_at
+      SELECT id, first_name, last_name, email, role, is_active, created_at
       FROM users
-      WHERE role = 'instructor'
-      ORDER BY created_at DESC
+      WHERE role IN ('instructor', 'admin')
+        AND is_active = 1
+      ORDER BY role ASC, first_name ASC
     `);
-    res.json({ success: true, data: instructors });
+    res.json({ success: true, data: sanitizeBigInt(instructors) });
   } catch (err) {
     console.error("💥 getAllInstructors error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -759,14 +811,18 @@ export const getAllInstructors = async (req: Request, res: Response) => {
 
 export const createInstructor = async (req: Request, res: Response) => {
   try {
-    const { first_name, last_name, email, password, bio, avatar_url } = req.body;
+    const { first_name, last_name, email, password } = req.body;
     if (!first_name || !last_name || !email || !password)
       return res.status(400).json({ success: false, message: "Champs requis manquants" });
 
+    // ✅ Utiliser password_hash (vrai nom de colonne dans users)
+    const bcrypt = require("bcryptjs");
+    const hash = await bcrypt.hash(password, 10);
+
     await query(
-      `INSERT INTO users (first_name, last_name, email, password, role, bio, avatar_url, is_validated, created_at)
-       VALUES (?, ?, ?, ?, 'instructor', ?, ?, 1, NOW())`,
-      [first_name, last_name, email, password, bio || "", avatar_url || null]
+      `INSERT INTO users (first_name, last_name, email, password_hash, role, is_active, email_verified, created_at)
+       VALUES (?, ?, ?, ?, 'instructor', 1, 1, NOW())`,
+      [first_name, last_name, email, hash]
     );
 
     res.json({ success: true, message: "✅ Instructeur créé avec succès" });
@@ -778,11 +834,11 @@ export const createInstructor = async (req: Request, res: Response) => {
 
 export const updateInstructor = async (req: Request, res: Response) => {
   try {
-    const { first_name, last_name, bio, avatar_url, is_validated } = req.body;
+    const { first_name, last_name, is_active } = req.body;
     await query(
-      `UPDATE users SET first_name=?, last_name=?, bio=?, avatar_url=?, is_validated=?, updated_at=NOW() 
-       WHERE id=? AND role='instructor'`,
-      [first_name, last_name, bio, avatar_url, is_validated ? 1 : 0, req.params.id]
+      `UPDATE users SET first_name=?, last_name=?, is_active=?, updated_at=NOW()
+       WHERE id=? AND role IN ('instructor','admin')`,
+      [first_name, last_name, is_active ? 1 : 0, req.params.id]
     );
     res.json({ success: true, message: "✅ Instructeur mis à jour" });
   } catch (err) {
@@ -811,7 +867,7 @@ export const getUserProfileAdmin = async (req: Request, res: Response) => {
 
     // 🔹 Infos principales
     const [user] = await query(`
-      SELECT id, first_name, last_name, email, role, bio, avatar_url, is_validated, created_at
+      SELECT id, first_name, last_name, email, role, is_active, created_at
       FROM users WHERE id = ?`, [id]);
 
     if (!user)
@@ -865,7 +921,7 @@ export const getUserByIdAdmin = async (req: Request, res: Response) => {
 
     // Vérifie si l'utilisateur existe
     const [user] = await query(
-      `SELECT id, first_name, last_name, email, role, is_validated, created_at
+      `SELECT id, first_name, last_name, email, role, created_at
        FROM users WHERE id = ?`,
       [id]
     );
@@ -1262,14 +1318,35 @@ export const toggleModulePublish = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { is_published } = req.body;
-    await query(
-      `UPDATE modules SET is_published=?, updated_at=NOW() WHERE id=?`,
-      [is_published ? 1 : 0, id]
-    );
-    res.json({
-      success: true,
-      message: is_published ? "✅ Module publié" : "📦 Module dépublié",
-    });
+
+    // 1. Mettre à jour le module
+    await query(`UPDATE modules SET is_published=?, updated_at=NOW() WHERE id=?`, [is_published ? 1 : 0, id]);
+
+    // 2. Récupérer le course_id du module
+    const [mod]: any[] = await query(`SELECT course_id FROM modules WHERE id=?`, [id]);
+    if (mod) {
+      // 3. Recalculer la progression de tous les étudiants inscrits
+      const enrollments: any[] = await query(
+        `SELECT DISTINCT user_id FROM course_enrollments WHERE course_id=?`, [mod.course_id]
+      );
+      for (const { user_id } of enrollments) {
+        const [prog]: any = await query(`
+          SELECT ROUND(
+            COUNT(DISTINCT CASE WHEN lp.is_completed = 1 THEN lp.lesson_id END) * 100.0
+            / NULLIF(COUNT(DISTINCT l.id), 0), 2) AS pct
+          FROM lessons l
+          JOIN modules m ON l.module_id = m.id
+          LEFT JOIN lesson_progress lp ON l.id = lp.lesson_id AND lp.user_id = ? AND lp.course_id = ?
+          WHERE m.course_id = ? AND l.is_published = 1 AND m.is_published = 1
+        `, [user_id, mod.course_id, mod.course_id]);
+        await query(
+          `UPDATE course_enrollments SET completion_percentage=? WHERE user_id=? AND course_id=?`,
+          [prog?.pct || 0, user_id, mod.course_id]
+        );
+      }
+    }
+
+    res.json({ success: true, message: is_published ? "✅ Module publié" : "📦 Module dépublié" });
   } catch (err) {
     console.error("💥 toggleModulePublish error:", err);
     res.status(500).json({ success:false, message:"Erreur serveur" });
@@ -1281,14 +1358,37 @@ export const toggleLessonPublish = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { is_published } = req.body;
-    await query(
-      `UPDATE lessons SET is_published=?, updated_at=NOW() WHERE id=?`,
-      [is_published ? 1 : 0, id]
-    );
-    res.json({
-      success: true,
-      message: is_published ? "✅ Leçon publiée" : "📦 Leçon dépubliée",
-    });
+
+    // 1. Mettre à jour la leçon
+    await query(`UPDATE lessons SET is_published=?, updated_at=NOW() WHERE id=?`, [is_published ? 1 : 0, id]);
+
+    // 2. Récupérer le course_id via le module
+    const [les]: any[] = await query(`
+      SELECT m.course_id FROM lessons l JOIN modules m ON l.module_id=m.id WHERE l.id=?
+    `, [id]);
+    if (les) {
+      // 3. Recalculer la progression de tous les étudiants
+      const enrollments: any[] = await query(
+        `SELECT DISTINCT user_id FROM course_enrollments WHERE course_id=?`, [les.course_id]
+      );
+      for (const { user_id } of enrollments) {
+        const [prog]: any = await query(`
+          SELECT ROUND(
+            COUNT(DISTINCT CASE WHEN lp.is_completed = 1 THEN lp.lesson_id END) * 100.0
+            / NULLIF(COUNT(DISTINCT l.id), 0), 2) AS pct
+          FROM lessons l
+          JOIN modules m ON l.module_id = m.id
+          LEFT JOIN lesson_progress lp ON l.id = lp.lesson_id AND lp.user_id = ? AND lp.course_id = ?
+          WHERE m.course_id = ? AND l.is_published = 1 AND m.is_published = 1
+        `, [user_id, les.course_id, les.course_id]);
+        await query(
+          `UPDATE course_enrollments SET completion_percentage=? WHERE user_id=? AND course_id=?`,
+          [prog?.pct || 0, user_id, les.course_id]
+        );
+      }
+    }
+
+    res.json({ success: true, message: is_published ? "✅ Leçon publiée" : "📦 Leçon dépubliée" });
   } catch (err) {
     console.error("💥 toggleLessonPublish error:", err);
     res.status(500).json({ success:false, message:"Erreur serveur" });

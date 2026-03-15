@@ -130,19 +130,30 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
       });
     }
 
-    // Insérer
+    // Insérer l'avis
     const result: any = await query(
       `INSERT INTO course_reviews (user_id, course_id, enrollment_id, rating, comment, is_published)
        VALUES (?, ?, ?, ?, ?, 1)`,
       [userId, courseId, enrollment.id, ratingNum, comment?.trim() || null]
     );
 
-    // Le trigger BDD met à jour rating + review_count dans courses automatiquement
+    // Mettre à jour manuellement les stats du cours (en cas de trigger défaillant)
+    try {
+      await query(
+        `UPDATE courses SET
+          rating       = (SELECT COALESCE(AVG(r.rating), 0) FROM course_reviews r WHERE r.course_id = ? AND r.is_published = 1),
+          review_count = (SELECT COUNT(*) FROM course_reviews r WHERE r.course_id = ? AND r.is_published = 1)
+         WHERE id = ?`,
+        [courseId, courseId, courseId]
+      );
+    } catch (triggerErr) {
+      console.warn("updateCourseStats warning (non bloquant):", triggerErr);
+    }
 
     return res.status(201).json({
       success: true,
       message: "Avis soumis avec succès !",
-      data: { id: result.insertId, rating: ratingNum, comment: comment?.trim() || null },
+      data: { id: Number(result.insertId), rating: ratingNum, comment: comment?.trim() || null },
     });
   } catch (err) {
     console.error("submitReview:", err);
@@ -179,7 +190,16 @@ export const updateReview = async (req: AuthenticatedRequest, res: Response) => 
       [ratingNum, comment?.trim() || null, userId, courseId]
     );
 
-    // Le trigger BDD recalcule rating automatiquement
+    // Mettre à jour les stats du cours
+    try {
+      await query(
+        `UPDATE courses SET
+          rating       = (SELECT COALESCE(AVG(r.rating), 0) FROM course_reviews r WHERE r.course_id = ? AND r.is_published = 1),
+          review_count = (SELECT COUNT(*) FROM course_reviews r WHERE r.course_id = ? AND r.is_published = 1)
+         WHERE id = ?`,
+        [courseId, courseId, courseId]
+      );
+    } catch (e) { console.warn("updateStats:", e); }
 
     return res.json({ success: true, message: "Avis modifié avec succès." });
   } catch (err) {

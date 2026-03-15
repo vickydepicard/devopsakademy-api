@@ -104,15 +104,17 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
          c.is_free,
          cat.name AS category_name,
 
-         -- ✅ Nombre total de leçons dans ce cours
+         -- ✅ Leçons publiées uniquement (respecte dépublication modules/leçons)
          (
            SELECT COUNT(l.id)
            FROM lessons l
            INNER JOIN modules m ON l.module_id = m.id
            WHERE m.course_id = c.id
+             AND l.is_published = 1
+             AND m.is_published = 1
          ) AS total_lessons,
 
-         -- ✅ Nombre de leçons complétées par l'étudiant
+         -- ✅ Leçons complétées sur les leçons publiées seulement
          (
            SELECT COUNT(lp.id)
            FROM lesson_progress lp
@@ -120,6 +122,9 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
            INNER JOIN modules m ON l.module_id = m.id
            WHERE m.course_id = c.id
              AND lp.user_id = ce.user_id
+             AND lp.is_completed = 1
+             AND l.is_published = 1
+             AND m.is_published = 1
          ) AS completed_lessons
 
        FROM course_enrollments ce
@@ -132,20 +137,39 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
       [userId]
     )
 
-    // Recalculer completion_percentage depuis les vraies leçons
-    const enriched = enrollments.map(e => {
+    // Recalculer completion_percentage et synchroniser en BDD
+    const enriched = await Promise.all(enrollments.map(async (e) => {
       const total     = Number(e.total_lessons)     || 0
       const completed = Number(e.completed_lessons) || 0
       const pct = total > 0
         ? Math.round((completed / total) * 100)
         : Number(e.completion_percentage) || 0
+
+      // Synchroniser en BDD si la valeur a changé
+      if (pct !== Number(e.completion_percentage)) {
+        try {
+          if (pct >= 100) {
+            await query(
+              "UPDATE course_enrollments SET completion_percentage=?, completed_at=NOW() WHERE user_id=? AND course_id=?",
+              [pct, userId, e.course_id]
+            );
+          } else {
+            await query(
+              "UPDATE course_enrollments SET completion_percentage=? WHERE user_id=? AND course_id=?",
+              [pct, userId, e.course_id]
+            );
+          }
+        } catch (_) {}
+      }
+
       return {
         ...e,
-        total_lessons:        total,
-        completed_lessons:    completed,
+        total_lessons:         total,
+        completed_lessons:     completed,
         completion_percentage: pct,
+        is_completed:          pct >= 100,
       }
-    })
+    }))
 
     return res.json({ success: true, data: enriched })
   } catch (error) {
