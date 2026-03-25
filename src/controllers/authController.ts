@@ -666,6 +666,87 @@ export const resetPassword = async (req: Request, res: Response) => {
   }
 };
 
+// ============================================================
+// PATCH authController.ts — Corrections flux Auth
+// Applique ces changements dans src/controllers/authController.ts
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// CORRECTIF 1 — register()
+// Problème : l'API retourne accessToken même si le compte n'est
+//            pas encore activé → frontend le stocke et croit
+//            l'utilisateur connecté alors qu'il ne l'est pas.
+// Correction : NE PLUS retourner accessToken dans register().
+//              Ajouter email_verification_required:true pour que
+//              le frontend sache qu'il faut attendre la vérif.
+//              Ajouter email_sent:true|false pour signaler si
+//              Brevo a bien envoyé l'email.
+// ─────────────────────────────────────────────────────────────
+
+// REMPLACER tout le bloc try/catch de register() par :
+
+
+// ─────────────────────────────────────────────────────────────
+// CORRECTIF 3 — login()
+// Problème : le message "Email non vérifié" est retourné mais
+//            le frontend l'affiche comme une erreur générique.
+// La réponse retourne déjà email_not_verified:true — c'est bon.
+// Le vrai fix est dans le frontend (voir Login.jsx patch).
+// Mais on améliore ici le message et on ajoute can_resend:true.
+// ─────────────────────────────────────────────────────────────
+
+// Dans login(), remplacer le bloc is_active par :
+/*
+    if (!user.is_active) {
+      if (!user.email_verified) {
+        return res.status(403).json({
+          success: false,
+          message: "Votre email n'est pas encore vérifié. Consultez votre boîte email ou cliquez sur « Renvoyer l'email ».",
+          email_not_verified: true,
+          can_resend: true,          // ✅ AJOUT — flag explicite
+          email: user.email,
+        });
+      }
+      return res.status(403).json({
+        success: false,
+        message: "Compte désactivé. Contactez l'administration.",
+      });
+    }
+*/
+
+// ─────────────────────────────────────────────────────────────
+// HELPER — Template email de vérification (extraire dans mail.service.ts)
+// ─────────────────────────────────────────────────────────────
+
+function buildVerificationEmail(firstName: string, verifyUrl: string): string {
+  return `<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;background:#f4f3fb;padding:20px;">
+<div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(45,40,127,0.1);">
+  <div style="background:linear-gradient(135deg,#2d287f,#5653e1);padding:28px 32px;text-align:center;">
+    <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
+  </div>
+  <div style="padding:32px;">
+    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${firstName} 👋</h2>
+    <p style="color:#555;font-size:15px;">Votre compte a été créé avec succès.<br/>
+    Cliquez sur le bouton ci-dessous pour activer votre compte :</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${verifyUrl}"
+        style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;
+               padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;display:inline-block;">
+        ✅ Activer mon compte
+      </a>
+    </div>
+    <p style="color:#888;font-size:13px;text-align:center;">
+      Ce lien expire dans <strong>24 heures</strong>.<br/>
+      Si vous n'avez pas créé ce compte, ignorez cet email.
+    </p>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
 // ✅ Export par défaut
 export default {
   register,
