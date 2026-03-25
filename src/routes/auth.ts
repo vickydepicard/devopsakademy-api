@@ -5,7 +5,11 @@ import {
   logout, 
   getCurrentUser, 
   refreshToken,
-  getDashboard  // ⬅️ IMPORT AJOUTÉ
+  getDashboard,
+  forgotPassword,
+  resetPassword,
+  verifyEmail,
+  resendVerification,
 } from '../controllers/authController';
 import { authenticate } from '../middleware/auth';
 import { requireAuth } from '../middleware/permissions'; // ⬅️ IMPORT AJOUTÉ
@@ -44,7 +48,11 @@ router.post('/register', register);
  */
 router.post('/login', login);
 
-router.post('/refresh-token', refreshToken);
+router.post('/refresh-token',       refreshToken);
+router.post('/forgot-password',      forgotPassword);
+router.post('/reset-password',       resetPassword);
+router.get ('/verify-email/:token',  verifyEmail);
+router.post('/resend-verification',  resendVerification);
 
 // ================= ROUTES PROTÉGÉES =================
 router.post('/logout', authenticate, logout);

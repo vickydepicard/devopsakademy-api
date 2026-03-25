@@ -5,14 +5,17 @@ import {
   unenrollFromCourse,
   getUserEnrollments,
   checkEnrollment,
+  getEnrollmentStatus,
   getCourseStudents,
   validateEnrollment,
   adminDeleteEnrollment,
   adminApproveEnrollment,
   getAllEnrollments,
-  getEnrollmentDetails,  // ✅ Ajouté ici
-  uploadPaymentProof,   // ✅ Ajouté ici
-  validatePayment       // ✅ Ajouté ici
+  getEnrollmentDetails,
+  uploadPaymentProof,
+  validatePayment,
+  rejectEnrollment,
+  getEnrollmentsByUser,
 } from "../controllers/enrollmentController";
 import { authenticate, authorizeRoles } from "../middleware/auth";
 const upload = multer({ dest: "uploads/payments/" });
@@ -40,7 +43,8 @@ const router = express.Router();
 router.post("/", authenticate, authorizeRoles(["student"]), enrollInCourse);
 router.delete("/:courseId", authenticate, authorizeRoles(["student"]), unenrollFromCourse);
 router.get("/me", authenticate, getUserEnrollments);
-router.get("/:courseId/check", authenticate, checkEnrollment);
+router.get("/status/:courseId", authenticate, getEnrollmentStatus);  // ✅ EnrollButton
+router.get("/:courseId/check",  authenticate, checkEnrollment);
 router.get("/:courseId/students", authenticate, authorizeRoles(["instructor", "admin"]), getCourseStudents);
 router.patch("/:courseId/students/:userId/validate", authenticate, authorizeRoles(["admin"]), validateEnrollment);
 router.delete("/:courseId/students/:userId", authenticate, authorizeRoles(["admin"]), adminDeleteEnrollment);
@@ -100,4 +104,20 @@ router.get(
   authorizeRoles(["student"]),
   getEnrollmentDetails
 );
+// GET /api/enrollments/user/:userId — Toutes les inscriptions d'un étudiant (admin)
+router.get(
+  "/user/:userId",
+  authenticate,
+  authorizeRoles(["admin"]),
+  getEnrollmentsByUser
+);
+
+// PATCH /api/enrollments/:userId/:courseId/reject — Rejeter une inscription
+router.patch(
+  "/:userId/:courseId/reject",
+  authenticate,
+  authorizeRoles(["admin"]),
+  rejectEnrollment
+);
+
 export default router;

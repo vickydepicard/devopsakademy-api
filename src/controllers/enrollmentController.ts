@@ -1,5 +1,6 @@
 // src/controllers/enrollmentController.ts
 import { Request, Response } from 'express'
+import { sendPaymentReceivedEmail } from '../services/mail.service';
 import { query } from '../config/database'
 import { AuthenticatedRequest } from '../middleware/auth'
 
@@ -207,48 +208,87 @@ export const submitPayment = async (req: Request, res: Response) => {
     const userId = authReq.user?.id
     if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
 
+    // ✅ Accepte courseId (route /:courseId/upload-proof) OU enrollmentId
+    const courseId     = Number(req.params.courseId)
     const enrollmentId = Number(req.params.enrollmentId)
-    const { amount, payment_method, reference, proof_url } = req.body
+    const { amount, payment_method, reference } = req.body
 
-    if (!amount || !payment_method || !proof_url)
-      return res.status(400).json({ success: false, message: 'amount, payment_method et proof_url requis' })
+    // payment_method requis (amount et proof_url peuvent venir du fichier ou être calculés)
+    if (!payment_method)
+      return res.status(400).json({ success: false, message: 'payment_method requis' })
+
+    // ✅ Chercher l'inscription par courseId OU enrollmentId
+    const whereClause = courseId && !isNaN(courseId)
+      ? 'WHERE ce.course_id = ? AND ce.user_id = ?'
+      : 'WHERE ce.id = ? AND ce.user_id = ?'
+    const whereParam = (courseId && !isNaN(courseId)) ? [courseId, userId] : [enrollmentId, userId]
 
     const enrollments: any[] = await query(
       `SELECT ce.id, ce.course_id, ce.payment_status, c.price, c.title
        FROM course_enrollments ce JOIN courses c ON c.id = ce.course_id
-       WHERE ce.id = ? AND ce.user_id = ?`,
-      [enrollmentId, userId]
+       ${whereClause}`,
+      whereParam
     )
-    if (!enrollments.length) return res.status(404).json({ success: false, message: 'Inscription introuvable' })
+    if (!enrollments.length)
+      return res.status(404).json({ success: false, message: 'Inscription introuvable. Inscrivez-vous dabord.' })
     if (enrollments[0].payment_status === 'verified')
       return res.status(400).json({ success: false, message: 'Paiement déjà validé' })
 
+    const actualEnrollmentId = enrollments[0].id
+    const actualAmount       = Number(amount) || Number(enrollments[0].price) || 0
+
+    // ✅ URL preuve: fichier uploadé (multer) OU champ JSON
+    const fileUploaded = (req as any).file
+    const actualProofUrl = fileUploaded
+      ? `/uploads/payments/${fileUploaded.filename}`
+      : (req.body?.proof_url || null)
+
     const existing: any[] = await query(
-      'SELECT id FROM payments WHERE user_id = ? AND course_id = ? AND status != "validated"',
+      "SELECT id FROM payments WHERE user_id = ? AND course_id = ? AND status != 'validated'",
       [userId, enrollments[0].course_id]
     )
     if (existing.length) {
       await query(
         `UPDATE payments SET amount=?, payment_method=?, reference=?, proof_url=?, status='pending', updated_at=NOW() WHERE id=?`,
-        [amount, payment_method, reference || null, proof_url, existing[0].id]
+        [actualAmount, payment_method, reference || null, actualProofUrl, existing[0].id]
       )
     } else {
       await query(
         `INSERT INTO payments (user_id, course_id, amount, currency, payment_method, reference, proof_url, status, created_at, updated_at)
          VALUES (?, ?, ?, 'XAF', ?, ?, ?, 'pending', NOW(), NOW())`,
-        [userId, enrollments[0].course_id, amount, payment_method, reference || null, proof_url]
+        [userId, enrollments[0].course_id, actualAmount, payment_method, reference || null, actualProofUrl]
       )
     }
 
     await query(
-      `UPDATE course_enrollments SET payment_status='pending', payment_proof_url=?, enrolled_at=enrolled_at WHERE id=?`,
-      [proof_url, enrollmentId]
+      `UPDATE course_enrollments SET payment_status='pending', payment_proof_url=? WHERE id=?`,
+      [actualProofUrl, actualEnrollmentId]
     )
+
+    // ✅ Email de confirmation de réception de la preuve
+    try {
+      const [userRow]: any = await query(
+        'SELECT first_name, email FROM users WHERE id = ?', [userId]
+      );
+      const [courseRow]: any = await query(
+        'SELECT title, price FROM courses WHERE id = ?', [enrollments[0].course_id]
+      );
+      if (userRow && courseRow) {
+        await sendPaymentReceivedEmail(
+          userRow.email,
+          userRow.first_name,
+          courseRow.title,
+          Number(courseRow.price) || actualAmount
+        ).catch(e => console.warn("⚠️ Email preuve non bloquant:", e.message));
+      }
+    } catch (emailErr) {
+      console.warn("⚠️ Email non bloquant:", emailErr);
+    }
 
     return res.json({
       success: true,
-      message: 'Preuve soumise — validation sous 24h',
-      data: { enrollment_id: enrollmentId, payment_status: 'pending' },
+      message: 'Preuve soumise avec succès — validation sous 24h ouvrées',
+      data: { enrollment_id: actualEnrollmentId, payment_status: 'pending' },
     })
   } catch (error) {
     console.error('submitPayment error:', error)
@@ -325,6 +365,116 @@ export const adminDeleteEnrollment = async (req: Request, res: Response) => {
   }
 }
 
+
+// PATCH /api/enrollments/:userId/:courseId/reject  (admin)
+export const rejectEnrollment = async (req: any, res: any) => {
+  try {
+    const { userId, courseId } = req.params;
+    const reason = req.body?.reason || req.body?.rejection_reason || "Paiement non conforme";
+    await query(
+      `UPDATE course_enrollments
+       SET is_approved = 0, payment_status = 'rejected', rejection_reason = ?
+       WHERE user_id = ? AND course_id = ?`,
+      [reason, userId, courseId]
+    );
+    return res.json({ success: true, message: "Inscription rejetée" });
+  } catch (err) {
+    console.error("rejectEnrollment:", err);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// GET /api/enrollments/user/:userId  (admin — inscriptions d'un étudiant)
+export const getEnrollmentsByUser = async (req: any, res: any) => {
+  try {
+    const { userId } = req.params;
+    const rows: any[] = await query(
+      `SELECT
+         ce.id, ce.user_id, ce.course_id, ce.payment_status,
+         ce.is_approved, ce.approved_at, ce.completion_percentage,
+         ce.enrolled_at, ce.payment_proof_url,
+         COALESCE(ce.rejection_reason, '') AS rejection_reason,
+         c.title AS course_title, c.thumbnail_url, c.level AS course_level,
+         c.duration_hours, cat.name AS category_name
+       FROM course_enrollments ce
+       JOIN courses c ON c.id = ce.course_id
+       LEFT JOIN course_categories cat ON cat.id = c.category_id
+       WHERE ce.user_id = ?
+       ORDER BY ce.enrolled_at DESC`,
+      [userId]
+    );
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error("getEnrollmentsByUser:", err);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// PATCH /api/admin/enrollments/:id/approve  (approve par enrollment.id)
+export const approveEnrollmentById = async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    await query(
+      `UPDATE course_enrollments
+       SET is_approved = 1, payment_status = 'verified', approved_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
+    // ✅ Email de validation
+    try {
+      const [row]: any = await query(
+        `SELECT u.first_name, u.email, c.title, c.id AS course_id
+         FROM course_enrollments ce
+         JOIN users u ON u.id = ce.user_id
+         JOIN courses c ON c.id = ce.course_id
+         WHERE ce.id = ?`, [id]
+      );
+      if (row) {
+        const { sendPaymentApprovedEmail } = await import('../services/mail.service');
+        await sendPaymentApprovedEmail(row.email, row.first_name, row.title, Number(row.course_id))
+          .catch(e => console.warn("Email approve:", e.message));
+      }
+    } catch(e) { console.warn("Email approve:", e); }
+    return res.json({ success: true, message: "Inscription approuvée" });
+  } catch (err) {
+    console.error("approveEnrollmentById:", err);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// PATCH /api/admin/enrollments/:id/reject  (reject par enrollment.id)
+export const rejectEnrollmentById = async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    const reason = req.body?.reason || "Paiement non conforme";
+    await query(
+      `UPDATE course_enrollments
+       SET is_approved = 0, payment_status = 'rejected', approved_at = NULL
+       WHERE id = ?`,
+      [id]
+    );
+    // ✅ Email de rejet
+    try {
+      const [row]: any = await query(
+        `SELECT u.first_name, u.email, c.title
+         FROM course_enrollments ce
+         JOIN users u ON u.id = ce.user_id
+         JOIN courses c ON c.id = ce.course_id
+         WHERE ce.id = ?`, [id]
+      );
+      if (row) {
+        const { sendPaymentRejectedEmail } = await import('../services/mail.service');
+        await sendPaymentRejectedEmail(row.email, row.first_name, row.title)
+          .catch(e => console.warn("Email reject:", e.message));
+      }
+    } catch(e) { console.warn("Email reject:", e); }
+    return res.json({ success: true, message: "Inscription rejetée" });
+  } catch (err) {
+    console.error("rejectEnrollmentById:", err);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
 export default {
   enroll, enrollInCourse,
   unenrollFromCourse,
@@ -333,6 +483,10 @@ export default {
   submitPayment, uploadPaymentProof,
   getCourseStudents,
   getAllEnrollments,
+  rejectEnrollment,
+  getEnrollmentsByUser,
+  approveEnrollmentById,
+  rejectEnrollmentById,
   validateEnrollment, validatePayment, adminApproveEnrollment,
   adminDeleteEnrollment,
 }

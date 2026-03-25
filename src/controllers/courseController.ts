@@ -201,7 +201,7 @@ export const getCourseById = async (req: Request, res: Response) => {
        FROM courses c
        LEFT JOIN users u               ON c.instructor_id = u.id
        LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       WHERE ${whereClause} AND c.is_published = 1`,
+       WHERE ${whereClause}`,
       [whereValue]
     );
     if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
@@ -242,54 +242,71 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
     const raw = req.params.id;
     const courseId = Number(raw);
     const user     = req.user;
-    const isSlug = isNaN(courseId) || !Number.isInteger(courseId);
+    const isSlug   = isNaN(courseId) || !Number.isInteger(courseId);
     const whereClause = isSlug ? "c.slug = ?" : "c.id = ?";
     const whereValue  = isSlug ? raw : courseId;
 
+    // ✅ COALESCE published_at pour éviter NULL → crash JSON
+    // ✅ Pas de filtre is_published → user connecté peut voir son cours inscrit
     const [course]: any = await query(
       `SELECT
-         c.id, c.title, c.description, c.short_description,
+         c.id, c.slug, c.title, c.description, c.short_description,
          c.thumbnail_url, c.video_preview_url, c.price, c.original_price,
          c.is_free, c.level, c.language, c.is_featured, c.is_published,
          c.rating, c.review_count, c.duration_hours, c.student_count,
          c.requirements, c.learning_outcomes, c.requires_approval,
          c.instructor_id, u.first_name, u.last_name, u.email AS instructor_email,
          cat.id AS category_id, cat.name AS category_name, cat.slug AS category_slug,
-         c.created_at, c.updated_at, c.published_at
+         c.created_at, c.updated_at,
+         COALESCE(c.published_at, c.updated_at, c.created_at) AS published_at
        FROM courses c
        LEFT JOIN users u               ON c.instructor_id = u.id
        LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       ${whereClause}`,
+       WHERE ${whereClause}`,
       [whereValue]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Cours introuvable" });
+    }
+
+    // ✅ Utiliser l'ID réel du cours (pas courseId du paramètre URL)
+    const actualCourseId = Number(course.id);
 
     let isEnrolled = false, isApproved = false, completion_percentage = 0, enrollmentStatus = "not_enrolled";
     if (user) {
-      const [enrollment]: any = await query(
-        `SELECT is_approved, completion_percentage, payment_status
-         FROM course_enrollments WHERE course_id = ? AND user_id = ?`,
-        [courseId, user.id]
-      );
-      if (enrollment) {
-        isEnrolled            = true;
-        isApproved            = enrollment.is_approved === 1;
-        completion_percentage = Number(enrollment.completion_percentage || 0);
-        enrollmentStatus      = enrollment.payment_status;
+      try {
+        const [enrollment]: any = await query(
+          `SELECT is_approved, completion_percentage, payment_status
+           FROM course_enrollments WHERE course_id = ? AND user_id = ?`,
+          [actualCourseId, user.id]
+        );
+        if (enrollment) {
+          isEnrolled            = true;
+          isApproved            = enrollment.is_approved === 1;
+          completion_percentage = Number(enrollment.completion_percentage || 0);
+          enrollmentStatus      = enrollment.payment_status;
+        }
+      } catch (enrollErr) {
+        console.warn("⚠️ getCourseByIdEnhanced enrollment (non bloquant):", enrollErr);
       }
     }
 
-    // Aperçu des 3 premiers modules
-    const modules = await query(
-      `SELECT m.id, m.title, m.description, m.order_index,
-              COUNT(l.id) AS lesson_count,
-              COALESCE(SUM(l.duration_minutes), 0) AS total_duration
-       FROM modules m
-       LEFT JOIN lessons l ON m.id = l.module_id AND l.is_published = 1
-       WHERE m.course_id = ? AND m.is_published = 1
-       GROUP BY m.id ORDER BY m.order_index ASC LIMIT 3`,
-      [courseId]
-    );
+    // ✅ Aperçu des 3 premiers modules — utilise actualCourseId
+    let modules: any[] = [];
+    try {
+      modules = await query(
+        `SELECT m.id, m.title, m.description, m.order_index,
+                COUNT(l.id) AS lesson_count,
+                COALESCE(SUM(l.duration_minutes), 0) AS total_duration
+         FROM modules m
+         LEFT JOIN lessons l ON m.id = l.module_id AND l.is_published = 1
+         WHERE m.course_id = ? AND m.is_published = 1
+         GROUP BY m.id ORDER BY m.order_index ASC LIMIT 3`,
+        [actualCourseId]
+      );
+    } catch (modErr) {
+      console.warn("⚠️ getCourseByIdEnhanced modules (non bloquant):", modErr);
+    }
 
     return res.json({
       success: true,
@@ -301,7 +318,7 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
     });
   } catch (error) {
     console.error("❌ getCourseByIdEnhanced:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: "Erreur lors du chargement du cours" });
   }
 };
 
@@ -309,6 +326,7 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
 // GET COURSE PUBLIC — Minimal (sans auth)
 // GET /api/courses/public/:id
 // ═════════════════════════════════════════════════════════════════════════════
+
 export const getCoursePublic = async (req: Request, res: Response): Promise<void> => {
   try {
     const courseId = Number(req.params.id);
