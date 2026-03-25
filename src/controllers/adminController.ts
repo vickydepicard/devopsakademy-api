@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { sendPaymentApprovedEmail, sendPaymentRejectedEmail } from '../services/mail.service';
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
 
@@ -209,16 +210,54 @@ export const deleteCourse = async (req: AuthenticatedRequest, res: Response) => 
  * ============================================================ */
 export const getAllEnrollments = async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const { page = 1, limit = 100, status } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+
+    let whereClause = "";
+    const params: any[] = [];
+    if (status === "pending")  { whereClause = "WHERE e.is_approved = 0 AND e.payment_status = 'pending'"; }
+    if (status === "verified") { whereClause = "WHERE e.is_approved = 1"; }
+    if (status === "rejected") { whereClause = "WHERE e.payment_status = 'rejected'"; }
+
     const enrollments = await query(`
-      SELECT e.id, e.enrolled_at, e.completion_percentage,
-             CONCAT(u.first_name, ' ', u.last_name) AS student_name,
-             c.title AS course_title
+      SELECT
+        e.id,
+        e.user_id,
+        e.course_id,
+        e.enrolled_at,
+        e.completion_percentage,
+        e.is_approved,
+        e.payment_status,
+        e.payment_proof_url,
+        e.approved_at,
+        u.first_name,
+        u.last_name,
+        u.email,
+        CONCAT(u.first_name, ' ', u.last_name) AS student_name,
+        c.title AS course_title,
+        c.thumbnail_url,
+        c.level AS course_level,
+        c.duration_hours,
+        cat.name AS category_name
       FROM course_enrollments e
       JOIN users u ON u.id = e.user_id
       JOIN courses c ON c.id = e.course_id
+      LEFT JOIN course_categories cat ON cat.id = c.category_id
+      ${whereClause}
       ORDER BY e.enrolled_at DESC
-    `);
-    res.json({ success: true, data: enrollments });
+      LIMIT ? OFFSET ?
+    `, [...params, Number(limit), offset]);
+
+    const [countRow]: any[] = await query(
+      `SELECT COUNT(*) AS total FROM course_enrollments e ${whereClause}`,
+      params
+    );
+
+    res.json({
+      success: true,
+      data: sanitizeBigInt(enrollments),
+      pagination: { total: Number(countRow?.total || 0), page: Number(page), limit: Number(limit) }
+    });
   } catch (err) {
     console.error("💥 getAllEnrollments error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });

@@ -3,7 +3,7 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { sendEmail } from '../services/mail.service';
+import { sendEmail, sendWelcomeEmail, sendPasswordResetEmail } from '../services/mail.service';
 import { query } from "../config/database";
 
 import { AuthenticatedRequest } from "../middleware/auth";
@@ -56,9 +56,18 @@ export const register = async (req: Request, res: Response) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // ✅ Compte désactivé par défaut → activé après vérification email
+    const verifToken     = crypto.randomBytes(32).toString("hex");
+    const verifTokenHash = crypto.createHash("sha256").update(verifToken).digest("hex");
+    const verifExpires   = new Date(Date.now() + 24 * 3600 * 1000); // 24h
+
     const insertResult: any = await query(
-      "INSERT INTO users (email, password_hash, first_name, last_name, role, is_active) VALUES (?, ?, ?, ?, ?, TRUE)",
-      [email, passwordHash, first_name, last_name, role]
+      `INSERT INTO users
+         (email, password_hash, first_name, last_name, role,
+          is_active, email_verified, verification_token, verification_token_expires)
+       VALUES (?, ?, ?, ?, ?, FALSE, FALSE, ?, ?)`,
+      [email, passwordHash, first_name, last_name, role, verifTokenHash,
+       verifExpires.toISOString().slice(0, 19).replace("T", " ")]
     );
 
     const userId = Number(insertResult.insertId);
@@ -86,18 +95,32 @@ await query(
     /* =====================================================
        📧 ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
     ===================================================== */
+    // ✅ Email de vérification (NON BLOQUANT)
     try {
+      const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${verifToken}`;
       await sendEmail({
         to: email,
-        subject: "Bienvenue sur DevOpsAkademy 🚀",
-        html: `
-          <h2>Bienvenue ${first_name} 👋</h2>
-          <p>Votre compte <b>DevOpsAkademy</b> a été créé avec succès.</p>
-          <p><b>Email :</b> ${email}</p>
-          <p>Vous pouvez maintenant vous connecter à la plateforme.</p>
-          <br/>
-          <p>— L'équipe DevOpsAkademy</p>
-        `,
+        subject: "Activez votre compte DevOpsAkademy 🚀",
+        html: `<!DOCTYPE html>
+<html><body style="font-family:Arial,sans-serif;background:#f4f3fb;padding:20px;">
+<div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(45,40,127,0.1);">
+  <div style="background:linear-gradient(135deg,#2d287f,#5653e1);padding:28px 32px;text-align:center;">
+    <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
+  </div>
+  <div style="padding:32px;">
+    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${first_name} 👋</h2>
+    <p style="color:#555;font-size:15px;">Votre compte a été créé avec succès.<br/>Cliquez sur le bouton ci-dessous pour activer votre compte :</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${verifyUrl}"
+        style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;
+               padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;display:inline-block;">
+        ✅ Activer mon compte
+      </a>
+    </div>
+    <p style="color:#888;font-size:13px;text-align:center;">Ce lien expire dans <strong>24 heures</strong>.<br/>Si vous n'avez pas créé ce compte, ignorez cet email.</p>
+  </div>
+</div>
+</body></html>`,
       });
     } catch (mailError) {
       console.error("MAIL REGISTER ERROR:", mailError);
@@ -146,10 +169,17 @@ export const login = async (req: Request, res: Response) => {
 
     const user = users[0];
 
-    if (!user.is_active)
-      return res
-        .status(403)
-        .json({ success: false, message: "Compte désactivé" });
+    if (!user.is_active) {
+      if (!user.email_verified) {
+        return res.status(403).json({
+          success: false,
+          message: "Email non vérifié. Consultez votre boîte email pour activer votre compte.",
+          email_not_verified: true,
+          email: user.email,
+        });
+      }
+      return res.status(403).json({ success: false, message: "Compte désactivé. Contactez l\'administration." });
+    }
 
     // ✅ CORRECTION : bcrypt.compare(password_en_clair, hash_en_bdd)
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
@@ -192,7 +222,7 @@ export const login = async (req: Request, res: Response) => {
     res.json({
       success: true,
       message: "Connexion réussie",
-      data: { user: userData, accessToken },
+      data: { user: userData, accessToken, refreshToken },
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -407,6 +437,235 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
   }
 };
 
+
+// ═══════════════════════════════════════════════════════
+// GET /api/auth/verify-email/:token
+// Active le compte après clic sur le lien email
+// ═══════════════════════════════════════════════════════
+export const verifyEmail = async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ success: false, message: "Token manquant" });
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    const [user]: any = await query(
+      `SELECT id, first_name, email, email_verified, verification_token_expires
+       FROM users
+       WHERE verification_token = ? AND is_active = FALSE
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Lien invalide ou déjà utilisé.",
+      });
+    }
+
+    // Vérifier expiration (24h)
+    if (user.verification_token_expires && new Date(user.verification_token_expires) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "Ce lien a expiré. Demandez un nouveau lien de vérification.",
+      });
+    }
+
+    // Activer le compte
+    await query(
+      `UPDATE users
+       SET is_active = TRUE, email_verified = TRUE,
+           verification_token = NULL, verification_token_expires = NULL,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [user.id]
+    );
+
+    // Email de bienvenue après activation
+    await sendWelcomeEmail(user.email, user.first_name)
+      .catch(e => console.warn("Email bienvenue:", e.message));
+
+    return res.json({
+      success: true,
+      message: "Compte activé avec succès ! Vous pouvez maintenant vous connecter.",
+    });
+  } catch (error) {
+    console.error("verifyEmail error:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+// POST /api/auth/resend-verification
+// Renvoie l'email de vérification
+// ═══════════════════════════════════════════════════════
+export const resendVerification = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email requis" });
+    }
+
+    const OK = { success: true, message: "Si un compte non vérifié existe, un email a été envoyé." };
+
+    const [user]: any = await query(
+      "SELECT id, first_name, email, is_active, email_verified FROM users WHERE email = ? LIMIT 1",
+      [email.toLowerCase().trim()]
+    );
+
+    if (!user || user.email_verified || user.is_active) {
+      return res.json(OK); // Ne pas révéler
+    }
+
+    // Nouveau token
+    const newToken     = crypto.randomBytes(32).toString("hex");
+    const newTokenHash = crypto.createHash("sha256").update(newToken).digest("hex");
+    const newExpires   = new Date(Date.now() + 24 * 3600 * 1000);
+
+    await query(
+      `UPDATE users SET verification_token = ?, verification_token_expires = ? WHERE id = ?`,
+      [newTokenHash, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
+    );
+
+const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${newToken}`;
+
+await sendEmail({
+  to: user.email,
+  subject: "Activez votre compte DevOpsAkademy",
+  html: `<p>Bonjour <strong>${user.first_name}</strong>,</p>
+         <p>
+           <a href="${verifyUrl}" 
+              style="background:#2d287f;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700;">
+              ✅ Activer mon compte
+           </a>
+         </p>
+         <p style="color:#888;font-size:12px;">Expire dans 24h.</p>`,
+}).catch(e => console.warn("Resend verification:", e.message));
+
+    return res.json(OK);
+  } catch (error) {
+    console.error("resendVerification error:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+// POST /api/auth/forgot-password
+// Envoie un lien de réinitialisation par email (30 min)
+// ═══════════════════════════════════════════════════════
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ success: false, message: "Email invalide" });
+    }
+
+    // Réponse générique → ne révèle pas si l'email existe
+    const OK = { success: true, message: "Si un compte existe, un email a été envoyé." };
+
+    const [user]: any = await query(
+      "SELECT id, first_name, email, is_active FROM users WHERE email = ? LIMIT 1",
+      [email.toLowerCase().trim()]
+    );
+    if (!user || !user.is_active) return res.json(OK);
+
+    // Supprimer les anciens tokens non utilisés
+    await query(
+      "DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL",
+      [user.id]
+    );
+
+    // Générer token sécurisé
+    const rawToken  = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    // Stocker en BDD (expire 30 min)
+    await query(
+      `INSERT INTO password_resets (user_id, token_hash, expires_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE))`,
+      [user.id, tokenHash]
+    );
+
+    // Envoyer l'email
+    await sendPasswordResetEmail(user.email, user.first_name, rawToken)
+      .catch(e => console.warn("⚠️ Email reset (non bloquant):", e.message));
+
+    return res.json(OK);
+  } catch (error) {
+    console.error("forgotPassword error:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+// POST /api/auth/reset-password
+// Valide le token et change le mot de passe
+// ═══════════════════════════════════════════════════════
+export const resetPassword = async (req: Request, res: Response) => {
+  try {
+    const { token, password } = req.body;
+
+    if (!token || !password) {
+      return res.status(400).json({ success: false, message: "Token et mot de passe requis" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: "Minimum 8 caractères requis" });
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    // Vérifier le token (non utilisé + non expiré)
+    const [row]: any = await query(
+      `SELECT pr.id, pr.user_id, u.email, u.first_name
+       FROM password_resets pr
+       JOIN users u ON u.id = pr.user_id
+       WHERE pr.token_hash = ?
+         AND pr.used_at IS NULL
+         AND pr.expires_at > NOW()
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (!row) {
+      return res.status(400).json({
+        success: false,
+        message: "Lien invalide ou expiré. Refaites une demande.",
+      });
+    }
+
+    // Mettre à jour le mot de passe
+    const newHash = await bcrypt.hash(password, 12);
+    await query(
+      "UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?",
+      [newHash, row.user_id]
+    );
+
+    // Invalider le token
+    await query("UPDATE password_resets SET used_at = NOW() WHERE id = ?", [row.id]);
+
+    // Invalider toutes les sessions actives
+    await query("DELETE FROM refresh_tokens WHERE user_id = ?", [row.user_id]).catch(() => {});
+
+    // Email de confirmation
+    await sendEmail({
+      to: row.email,
+      subject: "Mot de passe modifié — DevOpsAkademy",
+      html: `<p>Bonjour <strong>${row.first_name}</strong>,</p>
+             <p>Votre mot de passe a été modifié avec succès.</p>
+             <p>Si ce n'est pas vous, contactez-nous à support@devopsakademy.com</p>
+             <p>— L'équipe DevOpsAkademy</p>`,
+    }).catch(e => console.warn("Email confirm reset:", e.message));
+
+    return res.json({ success: true, message: "Mot de passe mis à jour." });
+  } catch (error) {
+    console.error("resetPassword error:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
 // ✅ Export par défaut
 export default {
   register,
@@ -415,4 +674,8 @@ export default {
   refreshToken,
   getCurrentUser,
   getDashboard,
+  forgotPassword,
+  resetPassword,
+  verifyEmail,
+  resendVerification,
 };

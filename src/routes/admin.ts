@@ -38,6 +38,11 @@ import {
   // 👨‍🏫 Instructeurs
   getAllInstructors, createInstructor, updateInstructor, deleteInstructor,
 } from "../controllers/adminController";
+import {
+  approveEnrollmentById,
+  rejectEnrollmentById,
+  getEnrollmentsByUser,
+} from "../controllers/enrollmentController";
 
 const router = express.Router();
 router.use(authenticate, authorizeRoles(["admin"]));
@@ -109,9 +114,14 @@ router.put   ("/instructors/:id",    updateInstructor);
 router.delete("/instructors/:id",    deleteInstructor);
 
 /* ─── INSCRIPTIONS ─── */
-router.get   ("/enrollments",                  getAllEnrollments);
-router.post  ("/enrollments",                  addEnrollment);
-router.delete("/enrollments/:enrollmentId",    deleteEnrollment);
+router.get   ("/enrollments",                       getAllEnrollments);
+router.post  ("/enrollments",                       addEnrollment);
+router.get   ("/enrollments/user/:userId",          getEnrollmentsByUser);
+router.delete("/enrollments/:enrollmentId",         deleteEnrollment);
+// ✅ Approuver/Rejeter par enrollment.id
+router.patch ("/enrollments/:id/approve",           approveEnrollmentById);
+router.patch ("/enrollments/:id/reject",            rejectEnrollmentById);
+// ✅ Inscriptions d'un étudiant spécifique
 
 /* ─── STATISTIQUES ─── */
 router.get("/stats",         getGlobalStats);
