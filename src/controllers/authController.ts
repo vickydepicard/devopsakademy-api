@@ -72,25 +72,11 @@ export const register = async (req: Request, res: Response) => {
 
     const userId = Number(insertResult.insertId);
 
-await query(
-  "INSERT IGNORE INTO user_profiles (user_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
-  [userId]
-);
-
-    const accessToken = signAccessToken({ id: userId, role });
-    const refreshToken = signRefreshToken({ id: userId, role });
-
+    // Créer le profil utilisateur (non bloquant)
     await query(
-      "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))",
-      [userId, hashToken(refreshToken)]
-    );
-
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 7 * 24 * 3600 * 1000,
-    });
+      "INSERT IGNORE INTO user_profiles (user_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
+      [userId]
+    ).catch((e: any) => console.warn("⚠️ user_profiles insert (non bloquant):", e.message));
 
     /* =====================================================
        📧 ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
@@ -122,17 +108,27 @@ await query(
 </div>
 </body></html>`,
       });
-    } catch (mailError) {
-      console.error("MAIL REGISTER ERROR:", mailError);
-      // ❗ Ne jamais bloquer l'inscription si le mail échoue
+    } catch (mailError: any) {
+      console.error("MAIL REGISTER ERROR:", mailError?.message || mailError);
+      // ❗ Email échoué → compte créé mais email non envoyé
+      return res.status(201).json({
+        success: true,
+        message: "Compte créé. L'email de vérification n'a pas pu être envoyé, cliquez sur 'Renvoyer'.",
+        email_sent: false,
+        data: {
+          user: { id: userId, email, first_name, last_name, role },
+          email_verification_required: true,
+        },
+      });
     }
 
     res.status(201).json({
       success: true,
-      message: "Utilisateur créé avec succès",
+      message: "Compte créé avec succès ! Vérifiez votre email pour activer votre compte.",
+      email_sent: true,
       data: {
         user: { id: userId, email, first_name, last_name, role },
-        accessToken,
+        email_verification_required: true,
       },
     });
   } catch (error) {

@@ -1,7 +1,7 @@
 // src/routes/instructor.routes.ts
 import { Router } from "express";
-import { requireAuth, authorizeRoles } from "../middleware/permissions";
-
+import { authenticate, authorizeRoles } from "../middleware/auth";
+import { requireAuth } from "../middleware/permissions";
 import {
   submitInstructorApplication,
   getMyInstructorApplication,
@@ -13,54 +13,40 @@ import {
 
 const router = Router();
 
-// ================= STUDENT / INSTRUCTOR =================
-
-// Soumettre une candidature
-router.post(
-  "/",
-  requireAuth,
-  authorizeRoles("student", "instructor"),
+// ── Étudiant : soumettre / voir sa candidature ──
+router.post("/",
+  authenticate,
+  authorizeRoles(["student", "instructor"]),
   submitInstructorApplication
 );
 
-// Voir sa candidature
-router.get(
-  "/my",
-  requireAuth,
+router.get("/my",
+  authenticate,
   getMyInstructorApplication
 );
 
-// ================= ADMIN =================
-
-// Liste toutes les candidatures
-router.get(
-  "/",
-  requireAuth,
-  authorizeRoles("admin", "superadmin"),
+// ── Admin : gérer toutes les candidatures ──
+router.get("/",
+  authenticate,
+  authorizeRoles(["admin", "superadmin"]),
   getAllInstructorApplications
 );
 
-// Détail d'une candidature
-router.get(
-  "/:id",
-  requireAuth,
-  authorizeRoles("admin", "superadmin"),
+router.get("/:id",
+  authenticate,
+  authorizeRoles(["admin", "superadmin"]),
   getInstructorApplicationById
 );
 
-// Approuver
-router.patch(
-  "/:id/approve",
-  requireAuth,
-  authorizeRoles("admin", "superadmin"),
+router.patch("/:id/approve",
+  authenticate,
+  authorizeRoles(["admin", "superadmin"]),
   approveInstructorApplication
 );
 
-// Rejeter
-router.patch(
-  "/:id/reject",
-  requireAuth,
-  authorizeRoles("admin", "superadmin"),
+router.patch("/:id/reject",
+  authenticate,
+  authorizeRoles(["admin", "superadmin"]),
   rejectInstructorApplication
 );
 
