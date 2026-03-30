@@ -22,7 +22,10 @@ import testMailRoute        from "./routes/test-mail.route";
 import mailRoute            from "./routes/mail.route";
 import profileRoutes        from "./routes/Profileroutes";
 import certificateRoutes    from "./routes/certificate.routes"; // ✅ NOUVEAU
-import reviewRoutes          from "./routes/reviews.routes";       // ✅ Reviews
+import reviewRoutes          from "./routes/reviews.routes";
+import instructorAppRoutes   from "./routes/instructor.routes";       // ✅ Reviews
+
+import instructorApplicationRoutes from './routes/instructor.routes';
 
 // Middleware
 import { errorHandler }         from "./middleware/errorHandler";
@@ -96,8 +99,9 @@ app.use("/api/test",         testMailRoute);
 app.use("/api/mails",        mailRoute);
 app.use("/api/profile",      profileRoutes);
 app.use("/api/certificates", certificateRoutes); // ✅ NOUVEAU
-app.use("/api/courses",      reviewRoutes);      // ✅ Reviews (POST/GET /:courseId/reviews)
-
+app.use("/api/courses",      reviewRoutes);
+app.use("/api/instructor-applications", instructorAppRoutes);  // ✅ Candidatures instructeur      // ✅ Reviews (POST/GET /:courseId/reviews)
+app.use('/api/instructor-applications', instructorApplicationRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((req: Request, res: Response) => {
