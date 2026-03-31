@@ -83,7 +83,7 @@ export const register = async (req: Request, res: Response) => {
     ===================================================== */
     // ✅ Email de vérification (NON BLOQUANT)
     try {
-      const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${verifToken}`;
+      const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}verify-email/${verifToken}`;
       await sendEmail({
         to: email,
         subject: "Activez votre compte DevOpsAkademy 🚀",
@@ -534,7 +534,7 @@ export const resendVerification = async (req: Request, res: Response) => {
       [newToken, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
     );
 
-const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${newToken}`;
+const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}verify-email/${newToken}`;
 
 await sendEmail({
   to: user.email,
