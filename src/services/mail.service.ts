@@ -128,7 +128,7 @@ export const sendWelcomeEmail = async (
       Vous pouvez dès maintenant explorer notre catalogue de formations DevOps, Cloud et CI/CD.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/courses"
+      <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}courses"
         style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;
                padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;display:inline-block;">
         🚀 Explorer les formations
@@ -176,7 +176,7 @@ export const sendPaymentApprovedEmail = async (
   courseTitle: string,
   courseId: number
 ): Promise<void> => {
-  const courseUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/courses/${courseId}/learn`;
+  const courseUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}courses/${courseId}/learn`;
   const content = `
     <h2 style="color:#059669;margin:0 0 8px;">Paiement validé — Accès accordé ! 🎉</h2>
     <p style="color:#555;font-size:15px;">Bonjour <strong>${firstName}</strong>,</p>
@@ -205,7 +205,7 @@ export const sendPaymentRejectedEmail = async (
   courseTitle: string,
   reason?: string
 ): Promise<void> => {
-  const paymentsUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/student/payments`;
+  const paymentsUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}student/payments`;
   const content = `
     <h2 style="color:#dc2626;margin:0 0 8px;">Preuve de paiement refusée ❌</h2>
     <p style="color:#555;font-size:15px;">Bonjour <strong>${firstName}</strong>,</p>
@@ -243,7 +243,7 @@ export const sendCertificateEmail = async (
   courseTitle: string,
   certificateNumber: string
 ): Promise<void> => {
-  const certUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/certificates/verify/${certificateNumber}`;
+  const certUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}certificates/verify/${certificateNumber}`;
   const content = `
     <h2 style="color:#2d287f;margin:0 0 8px;">Félicitations, vous avez réussi ! 🎓</h2>
     <p style="color:#555;font-size:15px;">Bonjour <strong>${firstName}</strong>,</p>
@@ -272,7 +272,7 @@ export const sendPasswordResetEmail = async (
   firstName: string,
   resetToken: string
 ): Promise<void> => {
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
+  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}reset-password/${resetToken}`;
   const content = `
     <h2 style="color:#2d287f;margin:0 0 8px;">Réinitialisation de mot de passe 🔑</h2>
     <p style="color:#555;font-size:15px;">Bonjour <strong>${firstName}</strong>,</p>
