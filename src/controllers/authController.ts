@@ -57,17 +57,17 @@ export const register = async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     // ✅ Compte désactivé par défaut → activé après vérification email
-    const verifToken     = crypto.randomBytes(32).toString("hex");
-    const verifTokenHash = crypto.createHash("sha256").update(verifToken).digest("hex");
-    const verifExpires   = new Date(Date.now() + 24 * 3600 * 1000); // 24h
+    const verifToken   = crypto.randomBytes(32).toString("hex"); // FIX: token brut
+    const verifExpires = new Date(Date.now() + 24 * 3600 * 1000);
 
     const insertResult: any = await query(
       `INSERT INTO users
          (email, password_hash, first_name, last_name, role,
           is_active, email_verified, verification_token, verification_token_expires)
        VALUES (?, ?, ?, ?, ?, FALSE, FALSE, ?, ?)`,
-      [email, passwordHash, first_name, last_name, role, verifTokenHash,
+      [email, passwordHash, first_name, last_name, role, verifToken,
        verifExpires.toISOString().slice(0, 19).replace("T", " ")]
+      // FIX: verifToken brut stocké directement (pas sha256)
     );
 
     const userId = Number(insertResult.insertId);
@@ -445,36 +445,44 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Token manquant" });
     }
 
-    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-
+    // FIX: comparer le token brut directement (pas de hash)
+    // Brevo modifiait le token dans l URL -> sha256(modifie) != hash stocke
     const [user]: any = await query(
-      `SELECT id, first_name, email, email_verified, verification_token_expires
+      `SELECT id, first_name, email, is_active, email_verified, verification_token_expires
        FROM users
-       WHERE verification_token = ? AND is_active = FALSE
+       WHERE verification_token = ?
        LIMIT 1`,
-      [tokenHash]
+      [token]
     );
 
     if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: "Lien invalide ou déjà utilisé.",
+      return res.json({
+        success: true,
+        already_active: true,
+        message: "Votre compte est deja active ! Vous pouvez vous connecter.",
       });
     }
 
-    // Vérifier expiration (24h)
+    if (user.is_active && user.email_verified) {
+      return res.json({
+        success: true,
+        already_active: true,
+        message: "Votre compte est deja active ! Vous pouvez vous connecter.",
+      });
+    }
+
     if (user.verification_token_expires && new Date(user.verification_token_expires) < new Date()) {
       return res.status(400).json({
         success: false,
-        message: "Ce lien a expiré. Demandez un nouveau lien de vérification.",
+        expired: true,
+        message: "Ce lien a expire. Demandez un nouveau lien de verification.",
       });
     }
 
-    // Activer le compte
     await query(
       `UPDATE users
        SET is_active = TRUE, email_verified = TRUE,
-           verification_token = NULL, verification_token_expires = NULL,
+           verification_token_expires = NULL,
            updated_at = NOW()
        WHERE id = ?`,
       [user.id]
@@ -517,13 +525,13 @@ export const resendVerification = async (req: Request, res: Response) => {
     }
 
     // Nouveau token
-    const newToken     = crypto.randomBytes(32).toString("hex");
-    const newTokenHash = crypto.createHash("sha256").update(newToken).digest("hex");
-    const newExpires   = new Date(Date.now() + 24 * 3600 * 1000);
+    // FIX: stocker le token brut
+    const newToken   = crypto.randomBytes(32).toString("hex");
+    const newExpires = new Date(Date.now() + 24 * 3600 * 1000);
 
     await query(
       `UPDATE users SET verification_token = ?, verification_token_expires = ? WHERE id = ?`,
-      [newTokenHash, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
+      [newToken, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
     );
 
 const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${newToken}`;
