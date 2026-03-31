@@ -438,6 +438,11 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
 // GET /api/auth/verify-email/:token
 // Active le compte après clic sur le lien email
 // ═══════════════════════════════════════════════════════
+// ================================================================
+// COPIE-COLLE CETTE FONCTION ENTIÈRE dans authController.ts
+// Remplace la fonction verifyEmail existante (cherche "verifyEmail")
+// ================================================================
+
 export const verifyEmail = async (req: Request, res: Response) => {
   try {
     const { token } = req.params;
@@ -447,14 +452,18 @@ export const verifyEmail = async (req: Request, res: Response) => {
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
+    // ✅ CORRECTION : supprimé "AND is_active = FALSE"
+    // Avant : compte déjà activé → user=null → erreur 400 (BUG)
+    // Après : on cherche par token seulement, puis on gère chaque cas
     const [user]: any = await query(
-      `SELECT id, first_name, email, email_verified, verification_token_expires
+      `SELECT id, first_name, email, is_active, email_verified, verification_token_expires
        FROM users
-       WHERE verification_token = ? AND is_active = FALSE
+       WHERE verification_token = ?
        LIMIT 1`,
       [tokenHash]
     );
 
+    // Token introuvable en BDD (vraiment invalide)
     if (!user) {
       return res.status(400).json({
         success: false,
@@ -462,10 +471,20 @@ export const verifyEmail = async (req: Request, res: Response) => {
       });
     }
 
-    // Vérifier expiration (24h)
+    // ✅ Compte déjà activé → succès au lieu d'erreur
+    if (user.is_active && user.email_verified) {
+      return res.json({
+        success: true,
+        already_active: true,
+        message: "Votre compte est déjà activé ! Vous pouvez vous connecter.",
+      });
+    }
+
+    // Lien expiré (>24h)
     if (user.verification_token_expires && new Date(user.verification_token_expires) < new Date()) {
       return res.status(400).json({
         success: false,
+        expired: true,
         message: "Ce lien a expiré. Demandez un nouveau lien de vérification.",
       });
     }
@@ -480,20 +499,20 @@ export const verifyEmail = async (req: Request, res: Response) => {
       [user.id]
     );
 
-    // Email de bienvenue après activation
+    // Email de bienvenue (non bloquant)
     await sendWelcomeEmail(user.email, user.first_name)
-      .catch(e => console.warn("Email bienvenue:", e.message));
+      .catch((e: any) => console.warn("Email bienvenue:", e.message));
 
     return res.json({
       success: true,
       message: "Compte activé avec succès ! Vous pouvez maintenant vous connecter.",
     });
+
   } catch (error) {
     console.error("verifyEmail error:", error);
     return res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 };
-
 // ═══════════════════════════════════════════════════════
 // POST /api/auth/resend-verification
 // Renvoie l'email de vérification
