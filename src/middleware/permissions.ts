@@ -154,7 +154,7 @@ export const requireAdmin = (
 };
 
 // ================= INSTRUCTEUR OU ADMIN =================
-export const requireInstructorOrAdmin = (
+export const requireInstructorOrAdmin = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
@@ -162,10 +162,34 @@ export const requireInstructorOrAdmin = (
   if (!req.user) {
     return res.status(401).json({ success: false, message: "Veuillez vous connecter." });
   }
-  if (req.user.role !== "instructor" && req.user.role !== "admin") {
-    return res.status(403).json({ success: false, message: "Accès réservé aux instructeurs ou administrateurs." });
+
+  // Admin → accès total
+  if (req.user.role === "admin" || req.user.role === "superadmin") {
+    return next();
   }
-  next();
+
+  // Instructeur → vérifier candidature acceptée
+  if (req.user.role === "instructor") {
+    try {
+      const [app]: any = await query(
+        "SELECT status FROM instructor_applications WHERE user_id = ? AND status = 'accepted' LIMIT 1",
+        [req.user.id]
+      );
+      if (app) return next();
+      return res.status(403).json({
+        success: false,
+        message: "Votre candidature instructeur n'a pas encore été validée.",
+        code: "APPLICATION_NOT_APPROVED",
+      });
+    } catch {
+      return next(); // fail-open en cas d'erreur DB
+    }
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: "Accès réservé aux instructeurs ou administrateurs.",
+  });
 };
 
 export const authorizeRoles = (...roles: string[]) => {
@@ -181,4 +205,3 @@ export const authorizeRoles = (...roles: string[]) => {
     next();
   };
 };
-

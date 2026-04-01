@@ -57,17 +57,17 @@ export const register = async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     // ✅ Compte désactivé par défaut → activé après vérification email
-    const verifToken   = crypto.randomBytes(32).toString("hex"); // FIX: token brut
-    const verifExpires = new Date(Date.now() + 24 * 3600 * 1000);
+    const verifToken     = crypto.randomBytes(32).toString("hex");
+    const verifTokenHash = crypto.createHash("sha256").update(verifToken).digest("hex");
+    const verifExpires   = new Date(Date.now() + 24 * 3600 * 1000); // 24h
 
     const insertResult: any = await query(
       `INSERT INTO users
          (email, password_hash, first_name, last_name, role,
           is_active, email_verified, verification_token, verification_token_expires)
        VALUES (?, ?, ?, ?, ?, FALSE, FALSE, ?, ?)`,
-      [email, passwordHash, first_name, last_name, role, verifToken,
+      [email, passwordHash, first_name, last_name, role, verifTokenHash,
        verifExpires.toISOString().slice(0, 19).replace("T", " ")]
-      // FIX: verifToken brut stocké directement (pas sha256)
     );
 
     const userId = Number(insertResult.insertId);
@@ -111,10 +111,14 @@ export const register = async (req: Request, res: Response) => {
     } catch (mailError: any) {
       console.error("MAIL REGISTER ERROR:", mailError?.message || mailError);
       // ❗ Email échoué → compte créé mais email non envoyé
+      const instructor_temp_token2 = (role === "instructor")
+        ? signAccessToken({ id: userId, role })
+        : undefined;
       return res.status(201).json({
         success: true,
         message: "Compte créé. L'email de vérification n'a pas pu être envoyé, cliquez sur 'Renvoyer'.",
         email_sent: false,
+        instructor_temp_token: instructor_temp_token2,
         data: {
           user: { id: userId, email, first_name, last_name, role },
           email_verification_required: true,
@@ -122,10 +126,16 @@ export const register = async (req: Request, res: Response) => {
       });
     }
 
+    // Token temporaire pour instructeurs → soumettre candidature sans activer d'abord
+    const instructor_temp_token = (role === "instructor")
+      ? signAccessToken({ id: userId, role })
+      : undefined;
+
     res.status(201).json({
       success: true,
       message: "Compte créé avec succès ! Vérifiez votre email pour activer votre compte.",
       email_sent: true,
+      instructor_temp_token,
       data: {
         user: { id: userId, email, first_name, last_name, role },
         email_verification_required: true,
@@ -445,40 +455,46 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Token manquant" });
     }
 
-    // FIX: comparer le token brut directement (pas de hash)
-    // Brevo modifiait le token dans l URL -> sha256(modifie) != hash stocke
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    // ✅ FIX : sans AND is_active = FALSE
+    // Cherche par token, gère les 4 cas : déjà activé, expiré, invalide, activation fraîche
     const [user]: any = await query(
       `SELECT id, first_name, email, is_active, email_verified, verification_token_expires
        FROM users
        WHERE verification_token = ?
        LIMIT 1`,
-      [token]
+      [tokenHash]
     );
 
+    // Token non trouvé → déjà activé (token effacé) ou vraiment invalide
     if (!user) {
       return res.json({
         success: true,
         already_active: true,
-        message: "Votre compte est deja active ! Vous pouvez vous connecter.",
+        message: "Votre compte est déjà activé ! Vous pouvez vous connecter.",
       });
     }
 
+    // Compte déjà activé (token encore présent)
     if (user.is_active && user.email_verified) {
       return res.json({
         success: true,
         already_active: true,
-        message: "Votre compte est deja active ! Vous pouvez vous connecter.",
+        message: "Votre compte est déjà activé ! Vous pouvez vous connecter.",
       });
     }
 
+    // Lien expiré
     if (user.verification_token_expires && new Date(user.verification_token_expires) < new Date()) {
       return res.status(400).json({
         success: false,
         expired: true,
-        message: "Ce lien a expire. Demandez un nouveau lien de verification.",
+        message: "Ce lien a expiré. Demandez un nouveau lien de vérification.",
       });
     }
 
+    // ✅ Activer le compte (garde le token pour les re-clics futurs)
     await query(
       `UPDATE users
        SET is_active = TRUE, email_verified = TRUE,
@@ -525,13 +541,13 @@ export const resendVerification = async (req: Request, res: Response) => {
     }
 
     // Nouveau token
-    // FIX: stocker le token brut
-    const newToken   = crypto.randomBytes(32).toString("hex");
-    const newExpires = new Date(Date.now() + 24 * 3600 * 1000);
+    const newToken     = crypto.randomBytes(32).toString("hex");
+    const newTokenHash = crypto.createHash("sha256").update(newToken).digest("hex");
+    const newExpires   = new Date(Date.now() + 24 * 3600 * 1000);
 
     await query(
       `UPDATE users SET verification_token = ?, verification_token_expires = ? WHERE id = ?`,
-      [newToken, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
+      [newTokenHash, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
     );
 
 const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${newToken}`;

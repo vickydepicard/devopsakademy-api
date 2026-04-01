@@ -1,6 +1,6 @@
 // src/routes/instructor.routes.ts
 import { Router } from "express";
-import { authenticate, authorizeRoles } from "../middleware/auth";
+import { authenticate, authorizeRoles, authenticateAllowInactive } from "../middleware/auth";
 import { requireAuth } from "../middleware/permissions";
 import {
   submitInstructorApplication,
@@ -15,8 +15,7 @@ const router = Router();
 
 // ── Étudiant : soumettre / voir sa candidature ──
 router.post("/",
-  authenticate,
-  authorizeRoles(["student", "instructor"]),
+  authenticateAllowInactive, // ✅ Accepte les comptes non encore activés
   submitInstructorApplication
 );
 

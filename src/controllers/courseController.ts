@@ -40,7 +40,8 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
     const user = req.user;
 
     if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (!title || !description) return res.status(400).json({ success: false, message: "Titre et description requis" });
+    if (!title) return res.status(400).json({ success: false, message: "Le titre du cours est obligatoire" });
+    // description is optional - use empty string if not provided
 
     const slug = slugify(title, { lower: true, strict: true }) + "-" + Date.now();
 
@@ -1205,10 +1206,78 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
 // ═════════════════════════════════════════════════════════════════════════════
 // EXPORT PAR DÉFAUT
 // ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// GET /api/instructor/courses
+// Retourne UNIQUEMENT les cours de l'instructeur connecté
+// ═════════════════════════════════════════════════════════════════════════════
+export const getInstructorCourses = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const instructorId = req.user?.id;
+    if (!instructorId) return res.status(401).json({ success: false, message: "Non authentifié" });
+
+    const courses = await query(
+      `SELECT
+         c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.is_free,
+         c.level, c.language, c.is_published, c.is_featured, c.rating,
+         c.review_count, c.duration_hours, c.slug, c.created_at, c.updated_at,
+         cat.name AS category_name,
+         COUNT(DISTINCT ce.user_id) AS student_count,
+         COUNT(DISTINCT m.id) AS module_count
+       FROM courses c
+       LEFT JOIN course_categories cat ON c.category_id = cat.id
+       LEFT JOIN course_enrollments ce ON c.id = ce.course_id
+       LEFT JOIN modules m ON c.id = m.course_id
+       WHERE c.instructor_id = ?
+       GROUP BY c.id
+       ORDER BY c.created_at DESC`,
+      [instructorId]
+    );
+
+    return res.json({ success: true, data: convertBigInt(courses) });
+  } catch (error) {
+    console.error("❌ getInstructorCourses:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+
+// ═══════════════════════════════════════════════════════
+// GET /api/instructor/stats
+// Statistiques de l'instructeur connecté
+// ═══════════════════════════════════════════════════════
+export const getInstructorStats = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const instructorId = req.user?.id;
+    if (!instructorId) return res.status(401).json({ success: false, message: "Non authentifié" });
+
+    const [row]: any = await query(
+      `SELECT
+         COUNT(DISTINCT c.id)                                    AS total_courses,
+         SUM(c.is_published)                                     AS published_courses,
+         COUNT(DISTINCT ce.user_id)                              AS total_students,
+         COALESCE(AVG(NULLIF(c.rating, 0)), 0)                   AS avg_rating,
+         COALESCE(SUM(ic.commission_amount), 0)                  AS total_earnings
+       FROM courses c
+       LEFT JOIN course_enrollments ce ON ce.course_id = c.id
+       LEFT JOIN instructor_commissions ic ON ic.course_id = c.id AND ic.instructor_id = ?
+       WHERE c.instructor_id = ?`,
+      [instructorId, instructorId]
+    );
+
+    return res.json({ success: true, data: convertBigInt(row || {}) });
+  } catch (error) {
+    console.error("❌ getInstructorStats:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+
 export default {
   // ── Cours ────────────────────────────────────
   createCourse,
   getCourses,
+  getInstructorCourses,
+  getInstructorStats,
   getCourseById,
   getCourseByIdEnhanced,
   getCoursePublic,
