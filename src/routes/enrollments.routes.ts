@@ -1,4 +1,6 @@
 import express from "express";
+import path from "path";
+import fs from "fs";
 import multer from "multer";
 import {
   enrollInCourse,
@@ -18,7 +20,31 @@ import {
   getEnrollmentsByUser,
 } from "../controllers/enrollmentController";
 import { authenticate, authorizeRoles } from "../middleware/auth";
-const upload = multer({ dest: "uploads/payments/" });
+
+// ✅ Chemin absolu pour les uploads — fonctionne en local ET en production
+const uploadsDir = path.join(process.cwd(), "uploads", "payments");
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+// ✅ diskStorage : conserve l'extension du fichier (jpg, png, pdf...)
+// Sans ça, multer sauve sans extension → le navigateur ne peut pas afficher l'image
+const paymentStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const ext  = path.extname(file.originalname).toLowerCase() || ".jpg";
+    const name = Date.now() + "-" + Math.round(Math.random() * 1e6) + ext;
+    cb(null, name);
+  },
+});
+
+const upload = multer({
+  storage: paymentStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 Mo max
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["image/jpeg","image/png","image/webp","image/jpg","application/pdf"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Format non supporté. Utilisez JPG, PNG, WEBP ou PDF."));
+  },
+});
 
 
 const router = express.Router();
