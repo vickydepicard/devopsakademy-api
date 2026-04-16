@@ -61,9 +61,46 @@ app.use(express.urlencoded({ extended: true }));
 // ── Fichiers statiques uploadés (vidéos, PDFs, ressources cours) ──
 // IMPORTANT: avant les routes API pour que /uploads soit accessible
 import path from "path";
-// ✅ Chemin absolu pour servir les uploads (fonctionne en prod et en local)
+// ✅ Servir les uploads avec Content-Type forcé pour les fichiers sans extension
+// Nécessaire car multer { dest } sauvegarde sans extension
+// Le navigateur ne peut pas deviner le type → on lit la signature du fichier (magic bytes)
+app.use("/uploads", (req: Request, res: Response, next: NextFunction) => {
+  const filePath = path.join(process.cwd(), "uploads", req.path);
+  const altPath  = path.join(__dirname, "..", "uploads", req.path);
+
+  const fs = require("fs");
+  const target = fs.existsSync(filePath) ? filePath : fs.existsSync(altPath) ? altPath : null;
+  if (!target) return next();
+
+  // Si pas d'extension → détecter le type depuis les magic bytes
+  const ext = path.extname(req.path).toLowerCase();
+  if (ext && ext !== ".htm" && ext !== ".html") return next(); // a déjà une bonne extension
+
+  try {
+    const buf = Buffer.alloc(4);
+    const fd = fs.openSync(target, "r");
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+
+    // Magic bytes detection
+    let mime = "image/jpeg"; // défaut
+    if (buf[0] === 0x89 && buf[1] === 0x50) mime = "image/png";
+    else if (buf[0] === 0x47 && buf[1] === 0x49) mime = "image/gif";
+    else if (buf[0] === 0x52 && buf[1] === 0x49) mime = "image/webp";
+    else if (buf[0] === 0x25 && buf[1] === 0x50) mime = "application/pdf";
+    else if (buf[0] === 0xFF && buf[1] === 0xD8) mime = "image/jpeg";
+
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.sendFile(target);
+  } catch {
+    next();
+  }
+});
+
+// Fallback statique normal
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads"))); // fallback
 
 app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
@@ -81,6 +118,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     "/api/auth",
     "/api-docs",
     "/api/certificates/verify", // vérification publique
+    "/uploads",                  // ✅ Fichiers statiques (preuves paiement, vidéos, ressources)
   ];
   if (openRoutes.some(r => req.originalUrl.startsWith(r))) return next();
   return checkTokenExpiration(req, res, next);
