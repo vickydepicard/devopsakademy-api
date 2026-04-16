@@ -272,7 +272,7 @@ export const sendPasswordResetEmail = async (
   firstName: string,
   resetToken: string
 ): Promise<void> => {
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}reset-password/${resetToken}`;
+  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
   const content = `
     <h2 style="color:#2d287f;margin:0 0 8px;">Réinitialisation de mot de passe 🔑</h2>
     <p style="color:#555;font-size:15px;">Bonjour <strong>${firstName}</strong>,</p>
