@@ -23,12 +23,9 @@ import mailRoute            from "./routes/mail.route";
 import profileRoutes        from "./routes/Profileroutes";
 import certificateRoutes    from "./routes/certificate.routes"; // ✅ NOUVEAU
 import reviewRoutes          from "./routes/reviews.routes";
-import instructorAppRoutes       from "./routes/instructor.routes";
-import instructorCoursesRoutes   from "./routes/instructor-courses.routes";
-import coInstructorRoutes        from "./routes/co-instructor.routes";
-import { authenticate }           from "./middleware/auth";
-import courseController           from "./controllers/courseController";
+import instructorAppRoutes   from "./routes/instructor.routes";       // ✅ Reviews
 
+import instructorApplicationRoutes from './routes/instructor.routes';
 
 // Middleware
 import { errorHandler }         from "./middleware/errorHandler";
@@ -64,7 +61,9 @@ app.use(express.urlencoded({ extended: true }));
 // ── Fichiers statiques uploadés (vidéos, PDFs, ressources cours) ──
 // IMPORTANT: avant les routes API pour que /uploads soit accessible
 import path from "path";
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+// ✅ Chemin absolu pour servir les uploads (fonctionne en prod et en local)
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads"))); // fallback
 
 app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
@@ -90,15 +89,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // ── API ROUTES ──
 app.use("/api/auth",         authRoutes);
 app.use("/api/users",        userRoutes);
-app.use("/api/courses",           courseRoutes);
-app.use("/api/instructor/courses", instructorCoursesRoutes);
-// GET /api/instructor/stats
-app.get("/api/instructor/stats", authenticate, (req, res, next) => {
-  (courseController as any).getInstructorStats(req, res, next);
-}); // ✅ Cours instructeur (filtrés par instructor_id)
-app.use("/api/instructor/courses/:courseId/modules", moduleRoutes);   // ✅ Modules par cours
-app.use("/api/instructor/modules",  moduleRoutes);  // ✅ CRUD modules
-app.use("/api/instructor",          adminRoutes);   // ✅ Leçons, ressources
+app.use("/api/courses",      courseRoutes);
 app.use("/api/courses/:courseId/modules", moduleRoutes);
 app.use("/api/progress",     progressRoutes);
 app.use("/api/forum",        forumRoutes);
@@ -112,6 +103,7 @@ app.use("/api/profile",      profileRoutes);
 app.use("/api/certificates", certificateRoutes); // ✅ NOUVEAU
 app.use("/api/courses",      reviewRoutes);
 app.use("/api/instructor-applications", instructorAppRoutes);  // ✅ Candidatures instructeur      // ✅ Reviews (POST/GET /:courseId/reviews)
+app.use('/api/instructor-applications', instructorApplicationRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((req: Request, res: Response) => {
