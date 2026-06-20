@@ -15,25 +15,23 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
 
     const {
       motivation, experience, expertise_areas, years_experience,
-      linkedin_url, portfolio_url, cv_url, certifications, video_url, weekly_hours,
-      // Accepte les deux noms de champ (compatibilité frontend)
-      proposed_course_title: _pct,
-      sample_course_topic: _sct,
-      proposed_course_description,
+      linkedin_url, portfolio_url, cv_url,
+      proposed_course_title, proposed_course_description,
     } = req.body;
-    const proposed_course_title = (_pct || _sct || "").trim();
 
-    // Validation
+    // Validation précise
     const errors: Record<string, string> = {};
-    if (!motivation || motivation.trim().length < 30)
-      errors.motivation = "La motivation doit contenir au moins 30 caractères";
-    if (!experience || experience.trim().length < 20)
-      errors.experience = "L'expérience doit contenir au moins 20 caractères";
-    if (!proposed_course_title || proposed_course_title.length < 3)
-      errors.proposed_course_title = "Le titre du cours est requis (minimum 3 caractères)";
-    if (!years_experience || isNaN(Number(years_experience)) || Number(years_experience) < 1)
-      errors.years_experience = "Les années d'expérience sont requises";
-    // linkedin_url : aucune validation stricte
+    if (!motivation || motivation.trim().length < 50)
+      errors.motivation = "La motivation doit contenir au moins 50 caractères";
+    if (!experience || experience.trim().length < 30)
+      errors.experience = "L'expérience doit contenir au moins 30 caractères";
+    if (!proposed_course_title || proposed_course_title.trim().length < 5)
+      errors.proposed_course_title = "Le titre du cours proposé est requis (min 5 caractères)";
+    if (!years_experience || isNaN(Number(years_experience)) || Number(years_experience) < 0)
+      errors.years_experience = "Les années d'expérience doivent être un nombre valide";
+
+    if (linkedin_url && !linkedin_url.includes("linkedin.com"))
+      errors.linkedin_url = "URL LinkedIn invalide (doit contenir linkedin.com)";
 
     if (Object.keys(errors).length > 0) {
       return res.status(400).json({
@@ -97,42 +95,14 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
                <p>— L'équipe DevOpsAkademy</p>`,
       }).catch(e => console.warn("Email candidature:", e.message));
 
-      // Email admin - récapitulatif complet
-      const adminTo = process.env.ADMIN_EMAIL || process.env.MAIL_FROM_EMAIL || "devopseduque@gmail.com";
-      const expertiseStr = Array.isArray(expertise_areas) ? expertise_areas.join(", ") : (expertise_areas || "—");
+      // Email de notification aux admins
       await sendEmail({
-        to: adminTo,
-        subject: `🆕 Nouvelle candidature instructeur — ${user.first_name}`,
-        html: `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f4f3fb;padding:16px;">
-<div style="max-width:560px;margin:auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 20px rgba(45,40,127,0.1);">
-  <div style="background:linear-gradient(135deg,#2d287f,#5653e1);padding:20px 28px;text-align:center;">
-    <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
-  </div>
-  <div style="padding:24px 28px;">
-    <h2 style="color:#2d287f;margin:0 0 14px;">Candidature — ${user.first_name} (${user.email})</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
-      <tr style="background:#f8f7ff;"><td style="padding:7px 10px;font-weight:700;color:#555;width:38%;">Expérience</td><td style="padding:7px 10px;">${years_experience} an(s)</td></tr>
-      <tr><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">Domaines</td><td style="padding:7px 10px;border-top:1px solid #eee;">${expertiseStr}</td></tr>
-      <tr style="background:#f8f7ff;"><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">Certifications</td><td style="padding:7px 10px;border-top:1px solid #eee;">${certifications || "—"}</td></tr>
-      <tr><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">Cours proposé</td><td style="padding:7px 10px;border-top:1px solid #eee;"><strong>${proposed_course_title || "—"}</strong></td></tr>
-      <tr style="background:#f8f7ff;"><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">Heures/sem</td><td style="padding:7px 10px;border-top:1px solid #eee;">${weekly_hours || "—"}h</td></tr>
-      <tr><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">LinkedIn</td><td style="padding:7px 10px;border-top:1px solid #eee;">${linkedin_url ? `<a href="${linkedin_url}" style="color:#5653e1;">${linkedin_url}</a>` : "—"}</td></tr>
-      <tr style="background:#f8f7ff;"><td style="padding:7px 10px;font-weight:700;color:#555;border-top:1px solid #eee;">Vidéo</td><td style="padding:7px 10px;border-top:1px solid #eee;">${video_url ? `<a href="${video_url}" style="color:#5653e1;">Voir</a>` : "—"}</td></tr>
-    </table>
-    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-bottom:10px;">
-      <p style="margin:0 0 4px;font-weight:700;color:#92400e;font-size:12px;">Motivation :</p>
-      <p style="margin:0;color:#78350f;font-size:12px;line-height:1.6;">${motivation ? motivation.substring(0,350) : "—"}</p>
-    </div>
-    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px;margin-bottom:18px;">
-      <p style="margin:0 0 4px;font-weight:700;color:#0284c7;font-size:12px;">Parcours :</p>
-      <p style="margin:0;color:#0369a1;font-size:12px;line-height:1.6;">${experience ? experience.substring(0,350) : "—"}</p>
-    </div>
-    <div style="text-align:center;">
-      <a href="${process.env.FRONTEND_URL}/admin/instructor-applications" style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;padding:11px 24px;border-radius:10px;font-weight:700;font-size:13px;display:inline-block;">Examiner la candidature →</a>
-    </div>
-  </div>
-</div></body></html>`,
-      }).catch(e => console.warn("Email admin:", e.message));
+        to: process.env.ADMIN_EMAIL || process.env.MAIL_FROM_EMAIL || "",
+        subject: `Nouvelle candidature instructeur — ${user.first_name}`,
+        html: `<p>Nouvelle candidature instructeur soumise par <strong>${user.first_name}</strong> (${user.email}).</p>
+               <p>Cours proposé : <em>${proposed_course_title || "Non spécifié"}</em></p>
+               <p><a href="${process.env.FRONTEND_URL}/admin/instructor-applications">Voir la candidature →</a></p>`,
+      }).catch(e => console.warn("Email admin candidature:", e.message));
     }
 
     return res.status(201).json({
@@ -210,9 +180,17 @@ export const getAllInstructorApplications = async (req: AuthenticatedRequest, re
       params
     );
 
+    // ✅ Stats par statut pour les compteurs du dashboard
+    const statRows: any[] = await query(
+      `SELECT status, COUNT(*) AS cnt FROM instructor_applications GROUP BY status`
+    );
+    const stats: Record<string, number> = {};
+    statRows.forEach((r: any) => { stats[r.status] = Number(r.cnt); });
+
     return res.json({
       success: true,
       data: apps,
+      stats,
       pagination: { total: Number(countRow?.total || 0), page: Number(page), limit: Number(limit) },
     });
   } catch (error) {
@@ -309,10 +287,10 @@ export const rejectInstructorApplication = async (req: AuthenticatedRequest, res
     const adminId = req.user?.id;
     const { rejection_reason, note } = req.body;
 
-    if (!rejection_reason || rejection_reason.trim().length < 3) {
+    if (!rejection_reason || rejection_reason.trim().length < 10) {
       return res.status(400).json({
         success: false,
-        message: "Un motif de refus est requis (minimum 3 caractères)",
+        message: "Un motif de refus est requis (minimum 10 caractères)",
       });
     }
 

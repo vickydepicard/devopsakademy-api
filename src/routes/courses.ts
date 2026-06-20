@@ -1,5 +1,6 @@
 import express from "express";
 import courseController from "../controllers/courseController";
+import { getCourseReviews, submitReview, updateReview, deleteReview, getMyReview } from "../controllers/reviewController";
 import {
   allowVisitors,
   requireAuth,
@@ -14,12 +15,15 @@ const router = express.Router();
 // ========================
 router.get("/", allowVisitors, courseController.getCourses);
 router.get("/popular", allowVisitors, courseController.getPopularCourses);
+router.get("/public-stats", allowVisitors, courseController.getPublicStats);
+router.get("/featured-reviews", allowVisitors, courseController.getFeaturedReviews);
 router.get("/filters", allowVisitors, courseController.getCourseFilters);
 router.get("/public/:id", allowVisitors, courseController.getCoursePublic);
 
 // ========================
 // ✅ DÉTAILS DU COURS (2 VERSIONS)
 // ========================
+router.get("/:id/preview", allowVisitors, courseController.getCoursePreview);
 router.get("/:id", allowVisitors, courseController.getCourseById);
 router.get("/:id/details", requireAuth, courseController.getCourseByIdEnhanced);
 
@@ -32,6 +36,15 @@ router.post("/:id/enroll", requireAuth, courseController.enrollCourse);
 // ✅ CONTENU DU COURS (INSCRIT)
 // ========================
 router.get("/:id/learn", requireAuth, requireEnrollment, courseController.getCourseContent);
+
+// ========================
+// ✅ AVIS (PUBLIC + CONNECTÉ)
+// ========================
+router.get("/:id/reviews",    allowVisitors, getCourseReviews);
+router.get("/:id/my-review",  requireAuth,   getMyReview);
+router.post("/:id/reviews",   requireAuth,   submitReview);
+router.put("/:id/reviews",    requireAuth,   updateReview);
+router.delete("/:id/reviews", requireAuth,   deleteReview);
 
 // ========================
 // ✅ MODULES + LEÇONS — ROUTE AJOUTÉE

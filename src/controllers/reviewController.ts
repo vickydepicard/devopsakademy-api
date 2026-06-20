@@ -9,7 +9,7 @@ import { AuthenticatedRequest } from "../middleware/auth";
 // ============================================================
 export const getCourseReviews = async (req: Request, res: Response) => {
   try {
-    const { courseId } = req.params;
+    const courseId = req.params.courseId || req.params.id;
     const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
     const limit = Math.min(20, parseInt(req.query.limit as string) || 10);
     const offset = (page - 1) * limit;
@@ -29,14 +29,20 @@ export const getCourseReviews = async (req: Request, res: Response) => {
       [courseId]
     );
 
-    // Liste des avis
+    // Liste des avis — avatar depuis user_profiles (pas depuis users)
     const reviews = await query(
       `SELECT
          cr.id, cr.rating, cr.comment, cr.created_at, cr.updated_at,
-         u.first_name, u.last_name, u.avatar_url
+         cr.is_published,
+         u.first_name, u.last_name,
+         COALESCE(up.avatar_url, NULL)  AS avatar_url,
+         COALESCE(up.job_title, NULL)   AS job_title,
+         COALESCE(up.company, NULL)     AS company
        FROM course_reviews cr
-       JOIN users u ON cr.user_id = u.id
-       WHERE cr.course_id = ? AND cr.is_published = 1
+       JOIN  users u          ON cr.user_id = u.id
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       WHERE cr.course_id = ?
+         AND cr.is_published = 1
        ORDER BY cr.created_at DESC
        LIMIT ? OFFSET ?`,
       [courseId, limit, offset]
@@ -72,7 +78,7 @@ export const getCourseReviews = async (req: Request, res: Response) => {
 // ============================================================
 export const getMyReview = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { courseId } = req.params;
+    const courseId = req.params.courseId || req.params.id;
     const userId = req.user!.id;
 
     const [review]: any = await query(
@@ -96,25 +102,30 @@ export const getMyReview = async (req: AuthenticatedRequest, res: Response) => {
 // ============================================================
 export const submitReview = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { courseId } = req.params;
+    const courseId = req.params.courseId || req.params.id;
     const userId = req.user!.id;
     const { rating, comment } = req.body;
 
-    // Validation
+    // Validation note
     const ratingNum = parseInt(rating);
     if (!ratingNum || ratingNum < 1 || ratingNum > 5) {
       return res.status(400).json({ success: false, message: "Note invalide (1 à 5 requis)" });
     }
 
-    // Vérifier que l'étudiant est inscrit
+    const userRole = (req as any).user?.role;
+    const isPrivileged = userRole === 'admin' || userRole === 'instructor';
+
+    // Vérifier que l'utilisateur est inscrit (ou admin/instructor)
     const [enrollment]: any = await query(
-      `SELECT id FROM course_enrollments WHERE user_id = ? AND course_id = ? AND is_approved = 1`,
+      `SELECT id, is_approved, payment_status FROM course_enrollments WHERE user_id = ? AND course_id = ?`,
       [userId, courseId]
     );
-    if (!enrollment) {
+
+    if (!enrollment && !isPrivileged) {
       return res.status(403).json({
         success: false,
-        message: "Vous devez être inscrit et avoir accès au cours pour laisser un avis.",
+        message: "Vous devez être inscrit à ce cours pour laisser un avis.",
+        code: "NOT_ENROLLED",
       });
     }
 
@@ -134,7 +145,7 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
     const result: any = await query(
       `INSERT INTO course_reviews (user_id, course_id, enrollment_id, rating, comment, is_published)
        VALUES (?, ?, ?, ?, ?, 1)`,
-      [userId, courseId, enrollment.id, ratingNum, comment?.trim() || null]
+      [userId, courseId, enrollment?.id || null, ratingNum, comment?.trim() || null]
     );
 
     // Mettre à jour manuellement les stats du cours (en cas de trigger défaillant)
@@ -167,7 +178,7 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
 // ============================================================
 export const updateReview = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { courseId } = req.params;
+    const courseId = req.params.courseId || req.params.id;
     const userId = req.user!.id;
     const { rating, comment } = req.body;
 
@@ -214,7 +225,7 @@ export const updateReview = async (req: AuthenticatedRequest, res: Response) => 
 // ============================================================
 export const deleteReview = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { courseId } = req.params;
+    const courseId = req.params.courseId || req.params.id;
     const userId = req.user!.id;
 
     const [existing]: any = await query(

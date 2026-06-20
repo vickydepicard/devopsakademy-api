@@ -43,6 +43,12 @@ import {
   rejectEnrollmentById,
   getEnrollmentsByUser,
 } from "../controllers/enrollmentController";
+// ✅ Certificats
+import {
+  issueCertificate,
+  getAllCertificates,
+  deleteCertificate,
+} from "../controllers/certificateController";
 
 const router = express.Router();
 router.use(authenticate, authorizeRoles(["admin"]));
@@ -76,30 +82,25 @@ router.delete("/courses/:id",   deleteCourseAdmin);
 /* ─── MODULES ─── */
 router.post  ("/modules",              createModule);
 router.patch ("/modules/:id",          updateModuleFull);
-router.patch ("/modules/:id/publish",  toggleModulePublish);   // ← NOUVEAU
+router.patch ("/modules/:id/publish",  toggleModulePublish);
 router.delete("/modules/:id",          deleteModule);
 
 /* ─── LEÇONS ─── */
-// ⚠️  /lessons/resources AVANT /lessons/:id
 router.post("/lessons/resources",            addLessonResource);
 router.get ("/modules/:moduleId/lessons",    getLessonsByModule);
 router.post("/lessons",                      createLessonFull);
 router.patch("/lessons/:id",                 updateLessonFull);
-router.patch("/lessons/:id/publish",         toggleLessonPublish);  // ← NOUVEAU
+router.patch("/lessons/:id/publish",         toggleLessonPublish);
 router.delete("/lessons/:id",                deleteLesson);
 
-/* ─── UPLOADS FICHIERS ─────────────────────────────────────
-   POST multipart/form-data — champ "video" ou "file"
-──────────────────────────────────────────────────────────── */
-// Uploader une vidéo directement depuis l'ordi → associée à la leçon
+/* ─── UPLOADS FICHIERS ─── */
 router.post("/lessons/:lessonId/upload-video",    uploadVideo.single("video"),    uploadLessonVideo);
-// Uploader un fichier comme ressource de leçon (PDF, ZIP, PPTX…)
 router.post("/lessons/:lessonId/upload-resource", uploadResource.single("file"),  uploadLessonResourceFile);
 
 /* ─── RESSOURCES ─── */
 router.get   ("/lessons/:lessonId/resources", getLessonResources);
 router.patch ("/lesson-resources/:id",        updateLessonResource);
-router.delete("/lesson-resources/:id",        deleteUploadedFile);   // ← supprime aussi le fichier disque
+router.delete("/lesson-resources/:id",        deleteUploadedFile);
 
 /* ─── CATÉGORIES ─── */
 router.get   ("/categories",       getAllCategories);
@@ -118,13 +119,17 @@ router.get   ("/enrollments",                       getAllEnrollments);
 router.post  ("/enrollments",                       addEnrollment);
 router.get   ("/enrollments/user/:userId",          getEnrollmentsByUser);
 router.delete("/enrollments/:enrollmentId",         deleteEnrollment);
-// ✅ Approuver/Rejeter par enrollment.id
 router.patch ("/enrollments/:id/approve",           approveEnrollmentById);
 router.patch ("/enrollments/:id/reject",            rejectEnrollmentById);
-// ✅ Inscriptions d'un étudiant spécifique
 
 /* ─── STATISTIQUES ─── */
 router.get("/stats",         getGlobalStats);
 router.get("/stats/courses", getCourseStats);
+
+/* ─── CERTIFICATS ✅ ─── */
+router.get("/certificates",         getAllCertificates);
+router.post("/certificates/issue",  issueCertificate);
+router.delete("/certificates/:id",  deleteCertificate);
+
 
 export default router;

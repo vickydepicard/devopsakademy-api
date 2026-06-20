@@ -32,11 +32,36 @@ const sanitizeBigInt = (data: any): any => {
  * ============================================================ */
 export const getAllUsers = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const users = await query(`
-      SELECT id, first_name, last_name, email, role, created_at
-      FROM users ORDER BY created_at DESC
-    `);
-    res.json({ success: true, data: users });
+    const { role, search } = req.query as { role?: string; search?: string };
+
+    // LEFT JOIN pour éviter les sous-requêtes corrélées (compatibilité MariaDB)
+    let sql = `
+      SELECT
+        u.id, u.first_name, u.last_name, u.email, u.role,
+        u.is_active, u.email_verified, u.created_at, u.last_login,
+        COALESCE(e.enrollment_count, 0) AS enrollment_count
+      FROM users u
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) AS enrollment_count
+        FROM course_enrollments
+        GROUP BY user_id
+      ) e ON e.user_id = u.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (role && role !== "all") { sql += " AND u.role = ?"; params.push(role); }
+    if (search) {
+      sql += " AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)";
+      const s = `%${search}%`;
+      params.push(s, s, s);
+    }
+    sql += " ORDER BY u.created_at DESC";
+
+    const users = await query(sql, params);
+
+    // ✅ sanitizeBigInt convertit tous les BigInt (COUNT, UNSIGNED INT) en Number
+    res.json({ success: true, data: sanitizeBigInt(users) });
   } catch (err) {
     console.error("💥 getAllUsers error:", err);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -297,20 +322,51 @@ export const deleteEnrollment = async (req: AuthenticatedRequest, res: Response)
  * ============================================================ */
 export const getGlobalStats = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const usersCount = await query("SELECT COUNT(*) AS total FROM users");
-    const coursesCount = await query("SELECT COUNT(*) AS total FROM courses");
-    const enrollmentsCount = await query("SELECT COUNT(*) AS total FROM course_enrollments");
-    const avgCompletion = await query(
-      "SELECT ROUND(AVG(completion_percentage),1) AS avg_completion FROM course_enrollments"
-    );
+    const [
+      usersCount,
+      coursesCount,
+      publishedCount,
+      enrollmentsCount,
+      pendingEnrollments,
+      avgCompletion,
+      instructorsCount,
+      certificatesCount,
+      activeSubscriptions,
+      pendingApplications,
+      pendingPayments,
+    ] = await Promise.all([
+      query("SELECT COUNT(*) AS total FROM users"),
+      query("SELECT COUNT(*) AS total FROM courses"),
+      query("SELECT COUNT(*) AS total FROM courses WHERE is_published = 1"),
+      query("SELECT COUNT(*) AS total FROM course_enrollments"),
+      query("SELECT COUNT(*) AS total FROM course_enrollments WHERE payment_status = 'pending'"),
+      query("SELECT ROUND(AVG(completion_percentage),1) AS avg_completion FROM course_enrollments"),
+      query("SELECT COUNT(DISTINCT u.id) AS total FROM users u JOIN instructor_applications ia ON ia.user_id = u.id WHERE ia.status = 'accepted'"),
+      query("SELECT COUNT(*) AS total FROM certificates WHERE is_revoked = 0"),
+      query("SELECT COUNT(*) AS total FROM subscriptions WHERE status = 'active'").catch(() => [{ total: 0 }]),
+      query("SELECT COUNT(*) AS total FROM instructor_applications WHERE status = 'pending'"),
+      query("SELECT COUNT(*) AS total FROM course_enrollments WHERE payment_status = 'pending'"),
+    ]);
 
     res.json({
       success: true,
       data: {
-        users: toNumber(usersCount[0]?.total) || 0,
-        courses: toNumber(coursesCount[0]?.total) || 0,
-        enrollments: toNumber(enrollmentsCount[0]?.total) || 0,
-        avgCompletion: parseFloat(avgCompletion[0]?.avg_completion || "0"),
+        // Chiffres principaux
+        users:                toNumber(usersCount[0]?.total)            || 0,
+        courses:              toNumber(coursesCount[0]?.total)           || 0,
+        published_courses:    toNumber(publishedCount[0]?.total)         || 0,
+        enrollments:          toNumber(enrollmentsCount[0]?.total)       || 0,
+        pending_enrollments:  toNumber(pendingEnrollments[0]?.total)     || 0,
+        avgCompletion:        parseFloat(avgCompletion[0]?.avg_completion || "0"),
+        // Stats dashboard supplémentaires
+        instructors:          toNumber(instructorsCount[0]?.total)       || 0,
+        total_instructors:    toNumber(instructorsCount[0]?.total)       || 0,
+        certificates:         toNumber(certificatesCount[0]?.total)      || 0,
+        total_certificates:   toNumber(certificatesCount[0]?.total)      || 0,
+        active_subscriptions: toNumber(activeSubscriptions[0]?.total)    || 0,
+        // Candidatures en attente
+        pending_applications: toNumber(pendingApplications[0]?.total)    || 0,
+        pending_payments:     toNumber(pendingPayments[0]?.total)        || 0,
       },
     });
   } catch (err) {
@@ -1150,26 +1206,39 @@ export const createLessonFull = async (req: Request, res: Response) => {
 export const updateLessonFull = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const {
-      title, content_type, content_url, article_content,
-      duration_minutes, order_index, is_published, is_preview,
-      requires_completion, is_downloadable
-    } = req.body;
+    const body = req.body;
+
+    // Récupérer les valeurs actuelles de la leçon
+    const [current]: any = await query(
+      `SELECT title, content_type, content_url, article_content,
+              duration_minutes, order_index, is_published, is_preview,
+              requires_completion, is_downloadable
+       FROM lessons WHERE id = ?`,
+      [id]
+    );
+    if (!current) return res.status(404).json({ success: false, message: "Leçon introuvable" });
+
+    // Fusionner : garder les valeurs actuelles si le champ n'est pas fourni (PATCH réel)
+    const title            = body.title            !== undefined ? body.title            : current.title;
+    const content_type     = body.content_type     !== undefined ? body.content_type     : current.content_type;
+    const content_url      = body.content_url      !== undefined ? body.content_url      : current.content_url;
+    const article_content  = body.article_content  !== undefined ? body.article_content  : current.article_content;
+    const duration_minutes = body.duration_minutes !== undefined ? body.duration_minutes : current.duration_minutes;
+    const order_index      = body.order_index      !== undefined ? body.order_index      : current.order_index;
+    const is_published     = body.is_published     !== undefined ? (body.is_published ? 1 : 0)     : current.is_published;
+    const is_preview       = body.is_preview       !== undefined ? (body.is_preview ? 1 : 0)       : current.is_preview;
+    const requires_completion = body.requires_completion !== undefined ? (body.requires_completion ? 1 : 0) : current.requires_completion;
+    const is_downloadable  = body.is_downloadable  !== undefined ? (body.is_downloadable ? 1 : 0)  : current.is_downloadable;
+
     await query(
       `UPDATE lessons SET
          title=?, content_type=?, content_url=?, article_content=?,
          duration_minutes=?, order_index=?, is_published=?, is_preview=?,
          requires_completion=?, is_downloadable=?, updated_at=NOW()
        WHERE id=?`,
-      [
-        title, content_type || "video", content_url || null, article_content || null,
-        duration_minutes || 0, order_index || 0,
-        is_published !== false ? 1 : 0,
-        is_preview ? 1 : 0,
-        requires_completion !== false ? 1 : 0,
-        is_downloadable ? 1 : 0,
-        id
-      ]
+      [title, content_type, content_url, article_content,
+       duration_minutes, order_index, is_published, is_preview,
+       requires_completion, is_downloadable, id]
     );
     res.json({ success: true, message: "✅ Leçon mise à jour" });
   } catch (err) {

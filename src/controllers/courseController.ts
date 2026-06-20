@@ -194,38 +194,59 @@ export const getCourseById = async (req: Request, res: Response) => {
          c.id, c.slug, c.title, c.description, c.short_description,
          c.thumbnail_url, c.video_preview_url, c.price, c.original_price,
          c.is_free, c.level, c.language, c.is_featured, c.is_published,
-         c.rating, c.review_count, c.duration_hours, c.student_count,
-         c.requirements, c.learning_outcomes,
+         c.duration_hours, c.requirements, c.learning_outcomes,
+         c.created_at, c.published_at,
          u.first_name, u.last_name,
          cat.name AS category_name, cat.slug AS category_slug,
-         c.created_at, c.published_at
+         /* ── Données recalculées en temps réel ── */
+         COALESCE(COUNT(DISTINCT ce.user_id), 0)                   AS student_count,
+         COALESCE(ROUND(AVG(cr.rating), 1), 0)                     AS rating,
+         COALESCE(COUNT(DISTINCT cr.id), 0)                        AS review_count
        FROM courses c
-       LEFT JOIN users u               ON c.instructor_id = u.id
-       LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       WHERE ${whereClause}`,
+       LEFT JOIN users u                ON c.instructor_id = u.id
+       LEFT JOIN course_categories cat  ON c.category_id   = cat.id
+       LEFT JOIN course_enrollments ce  ON c.id = ce.course_id
+       LEFT JOIN course_reviews cr      ON c.id = cr.course_id AND cr.is_published = 1
+       WHERE ${whereClause}
+       GROUP BY c.id`,
       [whereValue]
     );
     if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
 
-    // Aperçu des 2 premiers modules (titres + nb leçons uniquement)
-    const modules = await query(
-      `SELECT m.id, m.title, m.order_index, COUNT(l.id) AS lesson_count
+    // Tous les modules publiés avec leurs leçons (titre + durée + aperçu)
+    const modulesRaw = await query(
+      `SELECT m.id, m.title, m.order_index,
+              COUNT(l.id) AS lesson_count,
+              COALESCE(SUM(l.duration_minutes), 0) AS total_duration
        FROM modules m
        LEFT JOIN lessons l ON m.id = l.module_id AND l.is_published = 1
        WHERE m.course_id = ? AND m.is_published = 1
-       GROUP BY m.id ORDER BY m.order_index ASC LIMIT 2`,
+       GROUP BY m.id, m.title, m.order_index ORDER BY m.order_index ASC`,
       [courseId]
+    );
+
+    // Charger les leçons de chaque module (titre, durée, type, aperçu — pas le contenu)
+    const modulesWithLessons = await Promise.all(
+      (modulesRaw as any[]).map(async (mod: any) => {
+        const lessons = await query(
+          `SELECT id, title, content_type, duration_minutes, is_preview, order_index
+           FROM lessons
+           WHERE module_id = ? AND is_published = 1
+           ORDER BY order_index ASC`,
+          [mod.id]
+        );
+        return { ...mod, lessons: convertBigInt(lessons) };
+      })
     );
 
     return res.json({
       success: true,
       data: {
         ...convertBigInt(course),
-        modules: convertBigInt(modules),
+        modules: convertBigInt(modulesWithLessons),
         isEnrolled: false, isApproved: false,
         enrollmentStatus: "not_enrolled",
         completion_percentage: 0,
-        info: "Version publique — Connectez-vous pour plus de détails",
       },
     });
   } catch (error) {
@@ -254,16 +275,22 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
          c.id, c.slug, c.title, c.description, c.short_description,
          c.thumbnail_url, c.video_preview_url, c.price, c.original_price,
          c.is_free, c.level, c.language, c.is_featured, c.is_published,
-         c.rating, c.review_count, c.duration_hours, c.student_count,
-         c.requirements, c.learning_outcomes, c.requires_approval,
-         c.instructor_id, u.first_name, u.last_name, u.email AS instructor_email,
+         c.duration_hours, c.requirements, c.learning_outcomes, c.requires_approval,
+         c.instructor_id, c.created_at, c.updated_at,
+         COALESCE(c.published_at, c.updated_at, c.created_at) AS published_at,
+         u.first_name, u.last_name, u.email AS instructor_email,
          cat.id AS category_id, cat.name AS category_name, cat.slug AS category_slug,
-         c.created_at, c.updated_at,
-         COALESCE(c.published_at, c.updated_at, c.created_at) AS published_at
+         /* ── Données recalculées en temps réel ── */
+         COALESCE(COUNT(DISTINCT ce.user_id), 0)                   AS student_count,
+         COALESCE(ROUND(AVG(cr.rating), 1), 0)                     AS rating,
+         COALESCE(COUNT(DISTINCT cr.id), 0)                        AS review_count
        FROM courses c
-       LEFT JOIN users u               ON c.instructor_id = u.id
-       LEFT JOIN course_categories cat ON c.category_id   = cat.id
-       WHERE ${whereClause}`,
+       LEFT JOIN users u                ON c.instructor_id = u.id
+       LEFT JOIN course_categories cat  ON c.category_id   = cat.id
+       LEFT JOIN course_enrollments ce  ON c.id = ce.course_id
+       LEFT JOIN course_reviews cr      ON c.id = cr.course_id AND cr.is_published = 1
+       WHERE ${whereClause}
+       GROUP BY c.id`,
       [whereValue]
     );
     if (!course) {
@@ -283,7 +310,10 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
         );
         if (enrollment) {
           isEnrolled            = true;
-          isApproved            = enrollment.is_approved === 1;
+          // Cours gratuit → accès même si is_approved=0 (inscription auto)
+          isApproved            = enrollment.is_approved === 1
+                                || enrollment.payment_status === 'verified'
+                                || enrollment.payment_status === 'free';
           completion_percentage = Number(enrollment.completion_percentage || 0);
           enrollmentStatus      = enrollment.payment_status;
         }
@@ -292,18 +322,31 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
       }
     }
 
-    // ✅ Aperçu des 3 premiers modules — utilise actualCourseId
+    // Tous les modules publiés avec leçons détaillées (titre, durée, type, aperçu)
     let modules: any[] = [];
     try {
-      modules = await query(
+      const modulesRaw = await query(
         `SELECT m.id, m.title, m.description, m.order_index,
                 COUNT(l.id) AS lesson_count,
                 COALESCE(SUM(l.duration_minutes), 0) AS total_duration
          FROM modules m
          LEFT JOIN lessons l ON m.id = l.module_id AND l.is_published = 1
          WHERE m.course_id = ? AND m.is_published = 1
-         GROUP BY m.id ORDER BY m.order_index ASC LIMIT 3`,
+         GROUP BY m.id, m.title, m.order_index ORDER BY m.order_index ASC`,
         [actualCourseId]
+      );
+      // Charger les leçons de chaque module (sans contenu — juste métadonnées)
+      modules = await Promise.all(
+        (modulesRaw as any[]).map(async (mod: any) => {
+          const lessons = await query(
+            `SELECT id, title, content_type, duration_minutes, is_preview, order_index
+             FROM lessons
+             WHERE module_id = ? AND is_published = 1
+             ORDER BY order_index ASC`,
+            [mod.id]
+          );
+          return { ...convertBigInt(mod), lessons: convertBigInt(lessons) };
+        })
       );
     } catch (modErr) {
       console.warn("⚠️ getCourseByIdEnhanced modules (non bloquant):", modErr);
@@ -355,27 +398,114 @@ export const getCoursePreview = async (req: Request, res: Response): Promise<voi
     const courseId = Number(req.params.id);
     if (isNaN(courseId)) { res.status(400).json({ success: false, message: "ID invalide" }); return; }
 
+    // Infos du cours + stats temps réel
     const [course]: any = await query(
-      `SELECT c.id, c.title, c.short_description, c.thumbnail_url, c.level, c.language, c.price,
-              u.first_name, u.last_name
-       FROM courses c JOIN users u ON c.instructor_id = u.id
-       WHERE c.id = ? AND c.is_published = 1`,
+      `SELECT
+         c.id, c.title, c.short_description, c.thumbnail_url, c.video_preview_url,
+         c.level, c.language, c.price, c.is_free, c.duration_hours,
+         u.first_name, u.last_name,
+         COALESCE(COUNT(DISTINCT ce.user_id), 0)          AS student_count,
+         COALESCE(ROUND(AVG(cr.rating), 1), 0)             AS rating,
+         COALESCE(COUNT(DISTINCT cr.id), 0)                AS review_count
+       FROM courses c
+       JOIN users u ON c.instructor_id = u.id
+       LEFT JOIN course_enrollments ce ON c.id = ce.course_id
+       LEFT JOIN course_reviews cr     ON c.id = cr.course_id AND cr.is_published = 1
+       WHERE c.id = ?
+       GROUP BY c.id, c.title, c.short_description, c.thumbnail_url, c.video_preview_url,
+                c.level, c.language, c.price, c.is_free, c.duration_hours,
+                u.first_name, u.last_name`,
       [courseId]
     );
     if (!course) { res.status(404).json({ success: false, message: "Cours introuvable" }); return; }
 
-    const modules: any[] = await query(
-      `SELECT id, title FROM modules WHERE course_id = ? AND is_published = 1 ORDER BY order_index LIMIT 2`,
+    // Tous les modules publiés — GROUP BY explicite pour MariaDB strict mode
+    const modulesRaw: any[] = await query(
+      `SELECT m.id, m.title, m.order_index, COUNT(l.id) AS lesson_count
+       FROM modules m
+       LEFT JOIN lessons l ON m.id = l.module_id AND l.is_published = 1
+       WHERE m.course_id = ? AND m.is_published = 1
+       GROUP BY m.id, m.title, m.order_index
+       ORDER BY m.order_index ASC`,
       [courseId]
     );
-    for (const m of modules) {
-      m.lessons = await query(
-        `SELECT id, title, duration_minutes FROM lessons WHERE module_id = ? AND is_published = 1 ORDER BY order_index LIMIT 2`,
-        [m.id]
-      );
-    }
 
-    res.json({ success: true, data: { ...course, modules } });
+    // Pour chaque module : leçons avec content_url pour is_preview=1
+    // + enrichissement depuis lesson_resources si content_url absent
+    const modules = await Promise.all(
+      (modulesRaw as any[]).map(async (mod: any) => {
+        const lessons = await query(
+          `SELECT
+             id, title, content_type, duration_minutes, is_preview, order_index,
+             CASE WHEN is_preview = 1 THEN content_url ELSE NULL END AS content_url
+           FROM lessons
+           WHERE module_id = ? AND is_published = 1
+           ORDER BY order_index ASC`,
+          [mod.id]
+        );
+
+        // Enrichir les leçons aperçu sans content_url depuis lesson_resources
+        const enriched = await Promise.all(
+          (lessons as any[]).map(async (les: any) => {
+            if (!les.is_preview) return les;
+            if (les.content_url) return les; // déjà une URL directe
+
+            // Chercher une ressource vidéo uploadée
+            const [videoRes]: any = await query(
+              `SELECT file_url, file_type FROM lesson_resources
+               WHERE lesson_id = ?
+                 AND (file_url LIKE '%.mp4' OR file_url LIKE '%.webm'
+                      OR file_url LIKE '%.ogg' OR file_type = 'video'
+                      OR file_url LIKE '%.mov')
+               ORDER BY created_at DESC LIMIT 1`,
+              [les.id]
+            );
+            if (videoRes?.file_url) {
+              return { ...les, content_url: videoRes.file_url, content_type: 'video' };
+            }
+
+            // Chercher n'importe quelle ressource (PDF, etc.)
+            const [anyRes]: any = await query(
+              `SELECT file_url, file_type FROM lesson_resources
+               WHERE lesson_id = ? ORDER BY created_at DESC LIMIT 1`,
+              [les.id]
+            );
+            if (anyRes?.file_url) {
+              const ext = anyRes.file_url.split('.').pop()?.toLowerCase() || '';
+              const type = ['pdf'].includes(ext) ? 'article'
+                         : ['mp4','webm','ogg','mov'].includes(ext) ? 'video'
+                         : les.content_type;
+              return { ...les, content_url: anyRes.file_url, content_type: type };
+            }
+            return les;
+          })
+        );
+
+        return { ...convertBigInt(mod), lessons: convertBigInt(enriched) };
+      })
+    );
+
+    // Récupérer la 1ère leçon avec content_url pour le fallback vidéo
+    // (utile si aucune leçon n'est marquée is_preview)
+    const [firstLessonWithUrl]: any = await query(
+      `SELECT l.id, l.title, l.content_type, l.content_url, l.duration_minutes, l.is_preview
+       FROM lessons l
+       JOIN modules m ON l.module_id = m.id
+       WHERE m.course_id = ? AND l.is_published = 1
+         AND l.content_url IS NOT NULL AND l.content_url != ''
+       ORDER BY m.order_index ASC, l.order_index ASC
+       LIMIT 1`,
+      [courseId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...convertBigInt(course),
+        modules,
+        first_lesson_preview: firstLessonWithUrl ? convertBigInt(firstLessonWithUrl) : null,
+      }
+    });
   } catch (error) {
     console.error("❌ getCoursePreview:", error);
     res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -916,16 +1046,19 @@ export const getPopularCourses = async (req: Request, res: Response) => {
     const courses = await query(
       `SELECT
          c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.is_free,
-         c.level, c.language, c.is_featured, c.rating, c.review_count,
+         c.level, c.language, c.is_featured, c.duration_hours,
          cat.name AS category_name, u.first_name, u.last_name,
-         COUNT(DISTINCT ce.user_id) AS student_count
+         COUNT(DISTINCT ce.user_id)             AS student_count,
+         COALESCE(ROUND(AVG(cr.rating), 1), 0)  AS rating,
+         COALESCE(COUNT(DISTINCT cr.id), 0)      AS review_count
        FROM courses c
        LEFT JOIN course_categories cat ON c.category_id  = cat.id
        LEFT JOIN users u               ON c.instructor_id = u.id
        LEFT JOIN course_enrollments ce ON c.id            = ce.course_id
+       LEFT JOIN course_reviews cr     ON c.id            = cr.course_id AND cr.is_published = 1
        WHERE c.is_published = 1
        GROUP BY c.id
-       ORDER BY c.rating DESC, student_count DESC, c.created_at DESC
+       ORDER BY student_count DESC, rating DESC, c.created_at DESC
        LIMIT 6`
     );
     return res.json({ success: true, data: convertBigInt(courses) });
@@ -1272,6 +1405,73 @@ export const getInstructorStats = async (req: AuthenticatedRequest, res: Respons
 };
 
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GET PUBLIC PLATFORM STATS
+// GET /api/courses/public-stats
+// Endpoint public léger pour la Home page
+// ═════════════════════════════════════════════════════════════════════════════
+export const getPublicStats = async (req: Request, res: Response) => {
+  try {
+    const [
+      learnersRow,
+      coursesRow,
+      countriesRow,
+      reviewsRow,
+    ] = await Promise.all([
+      query("SELECT COUNT(DISTINCT user_id) AS total FROM course_enrollments"),
+      query("SELECT COUNT(*) AS total FROM courses WHERE is_published = 1"),
+      query("SELECT COUNT(DISTINCT country) AS total FROM user_profiles WHERE country IS NOT NULL AND country != ''"),
+      query("SELECT ROUND(AVG(rating), 1) AS avg_rating, COUNT(*) AS total FROM course_reviews WHERE is_published = 1"),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        learners:    Number(learnersRow[0]?.total)       || 0,
+        courses:     Number(coursesRow[0]?.total)        || 0,
+        countries:   Number(countriesRow[0]?.total)      || 0,
+        avg_rating:  parseFloat(reviewsRow[0]?.avg_rating || "0") || 0,
+        total_reviews: Number(reviewsRow[0]?.total)      || 0,
+      },
+    });
+  } catch (error) {
+    console.error("❌ getPublicStats:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GET FEATURED REVIEWS (témoignages Homepage)
+// GET /api/courses/featured-reviews
+// Retourne les meilleures reviews de la plateforme (note 5, avec commentaire)
+// ═════════════════════════════════════════════════════════════════════════════
+export const getFeaturedReviews = async (req: Request, res: Response) => {
+  try {
+    const reviews = await query(
+      `SELECT
+         cr.id, cr.rating, cr.comment, cr.created_at,
+         u.first_name, u.last_name,
+         up.job_title, up.company, up.country, up.avatar_url,
+         c.title AS course_title
+       FROM course_reviews cr
+       JOIN users u        ON cr.user_id   = u.id
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       JOIN courses c       ON cr.course_id = c.id
+       WHERE cr.is_published = 1
+         AND cr.rating >= 4
+         AND cr.comment IS NOT NULL
+         AND LENGTH(TRIM(cr.comment)) > 40
+       ORDER BY cr.rating DESC, cr.created_at DESC
+       LIMIT 6`
+    );
+    return res.json({ success: true, data: convertBigInt(reviews) });
+  } catch (error) {
+    console.error("❌ getFeaturedReviews:", error);
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
 export default {
   // ── Cours ────────────────────────────────────
   createCourse,
@@ -1284,6 +1484,8 @@ export default {
   getCoursePreview,
   getCourseFilters,
   getPopularCourses,
+  getPublicStats,
+  getFeaturedReviews,
   updateCourse,
   deleteCourse,
   getCourseStudents,

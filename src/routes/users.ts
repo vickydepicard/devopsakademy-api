@@ -14,23 +14,110 @@ const router = express.Router();
 // ----------------------------
 // Liste des instructeurs (publique, sans login)
 // ----------------------------
+// ── GET /api/users/instructors — Liste publique des instructeurs ──
 router.get('/instructors', async (req, res) => {
   try {
-    const result = await query(`
-      SELECT 
+    const instructors = await query(`
+      SELECT
         u.id,
-        u.first_name AS name,
-        u.email,
-        up.avatar_url,
-        up.bio
+        CONCAT(u.first_name, ' ', u.last_name) AS name,
+        u.first_name, u.last_name, u.email,
+        up.avatar_url, up.bio, up.job_title, up.company,
+        up.years_experience, up.skills,
+        up.github_url, up.linkedin_url, up.twitter_url, up.website_url,
+        up.country, up.city,
+        COUNT(DISTINCT c.id)  AS course_count,
+        COUNT(DISTINCT ce.id) AS student_count,
+        ROUND(AVG(c.rating), 1) AS avg_rating,
+        u.created_at
       FROM users u
-      LEFT JOIN user_profiles up ON u.id = up.user_id
-      WHERE u.role = "instructor"
+      LEFT JOIN user_profiles up  ON up.user_id = u.id
+      LEFT JOIN courses c         ON c.instructor_id = u.id AND c.is_published = 1
+      LEFT JOIN course_enrollments ce ON ce.course_id = c.id AND ce.is_approved = 1
+      WHERE u.role IN ('instructor','admin') AND u.is_active = 1
+      GROUP BY u.id, up.avatar_url, up.bio, up.job_title, up.company,
+               up.years_experience, up.skills, up.github_url, up.linkedin_url,
+               up.twitter_url, up.website_url, up.country, up.city
+      ORDER BY student_count DESC, course_count DESC
     `);
-    res.json(result);
+
+    // Convertir BigInt + parser skills JSON
+    const data = instructors.map((i: any) => ({
+      ...i,
+      course_count:  Number(i.course_count  ?? 0),
+      student_count: Number(i.student_count ?? 0),
+      avg_rating:    i.avg_rating ? parseFloat(i.avg_rating) : null,
+      skills: (() => { try { return JSON.parse(i.skills || '[]'); } catch { return []; } })(),
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erreur serveur' });
+    console.error('GET /instructors error:', err);
+    res.status(500).json({ success: false, error: 'Erreur serveur' });
+  }
+});
+
+// ── GET /api/users/instructors/:id — Profil public d'un instructeur ──
+router.get('/instructors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [instructor] = await query(`
+      SELECT
+        u.id,
+        CONCAT(u.first_name, ' ', u.last_name) AS name,
+        u.first_name, u.last_name, u.email,
+        up.avatar_url, up.bio, up.job_title, up.company,
+        up.years_experience, up.skills,
+        up.github_url, up.linkedin_url, up.twitter_url, up.website_url,
+        up.country, up.city,
+        COUNT(DISTINCT c.id)  AS course_count,
+        COUNT(DISTINCT ce.id) AS student_count,
+        ROUND(AVG(c.rating), 1) AS avg_rating,
+        u.created_at
+      FROM users u
+      LEFT JOIN user_profiles up  ON up.user_id = u.id
+      LEFT JOIN courses c         ON c.instructor_id = u.id AND c.is_published = 1
+      LEFT JOIN course_enrollments ce ON ce.course_id = c.id AND ce.is_approved = 1
+      WHERE u.id = ? AND u.is_active = 1
+      GROUP BY u.id, up.avatar_url, up.bio, up.job_title, up.company,
+               up.years_experience, up.skills, up.github_url, up.linkedin_url,
+               up.twitter_url, up.website_url, up.country, up.city
+    `, [id]);
+
+    if (!instructor) return res.status(404).json({ success: false, message: 'Instructeur introuvable' });
+
+    // Cours publiés de cet instructeur
+    const courses = await query(`
+      SELECT c.id, c.title, c.slug, c.description, c.price, c.is_free,
+             c.level, c.thumbnail_url, c.rating, c.duration_hours,
+             cat.name AS category_name,
+             COUNT(DISTINCT ce.id) AS enrollment_count
+      FROM courses c
+      LEFT JOIN course_categories cat ON cat.id = c.category_id
+      LEFT JOIN course_enrollments ce ON ce.course_id = c.id AND ce.is_approved = 1
+      WHERE c.instructor_id = ? AND c.is_published = 1
+      GROUP BY c.id
+      ORDER BY c.created_at DESC
+    `, [id]);
+
+    const data = {
+      ...instructor,
+      course_count:  Number(instructor.course_count  ?? 0),
+      student_count: Number(instructor.student_count ?? 0),
+      avg_rating:    instructor.avg_rating ? parseFloat(instructor.avg_rating) : null,
+      skills: (() => { try { return JSON.parse(instructor.skills || '[]'); } catch { return []; } })(),
+      courses: courses.map((c: any) => ({
+        ...c,
+        enrollment_count: Number(c.enrollment_count ?? 0),
+        rating: c.rating ? parseFloat(c.rating) : null,
+      })),
+    };
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('GET /instructors/:id error:', err);
+    res.status(500).json({ success: false, error: 'Erreur serveur' });
   }
 });
 
