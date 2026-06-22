@@ -41,10 +41,11 @@ const uploadThumb = multer({ storage: thumbStorage, limits: { fileSize: 5 * 1024
 // ══════════════════════════════════════════════════════════════
 
 // GET /api/bootcamps — liste publique (scheduled + live + ended)
-router.get("/", async (req, res) => {
+router.get("/", authenticate as any, async (req: any, res) => {
   try {
     const { status, limit = 20, page = 1 } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
+    const userId = req.user?.id || null;
 
     let where = "WHERE b.status != 'draft'";
     const params: any[] = [];
@@ -56,6 +57,7 @@ router.get("/", async (req, res) => {
         b.id, b.slug, b.title, b.description, b.thumbnail_url,
         b.scheduled_at, b.duration_minutes, b.status,
         b.is_free, b.price, b.max_participants, b.registered_count,
+        b.stream_url, b.replay_url,
         b.views_count, b.level, b.tags, b.language,
         CONCAT(u.first_name,' ',u.last_name) AS instructor_name,
         u.id AS instructor_id,
@@ -75,11 +77,22 @@ router.get("/", async (req, res) => {
       `SELECT COUNT(*) AS total FROM bootcamps b ${where}`, params
     ) as any[];
 
+    // Pour chaque bootcamp, vérifier si l'user connecté est inscrit
+    let registeredIds = new Set<number>();
+    if (userId) {
+      const regs: any[] = await query(
+        `SELECT bootcamp_id FROM bootcamp_registrations WHERE user_id = ?`,
+        [userId]
+      );
+      regs.forEach((r: any) => registeredIds.add(Number(r.bootcamp_id)));
+    }
+
     res.json({
       success: true,
       data: sanitize(rows).map((r: any) => ({
         ...r,
         tags: (() => { try { return JSON.parse(r.tags || "[]"); } catch { return []; } })(),
+        is_registered: registeredIds.has(Number(r.id)),
       })),
       pagination: { total: toNum(total), page: Number(page), limit: Number(limit) },
     });
