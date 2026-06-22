@@ -12,7 +12,7 @@ import { AuthenticatedRequest } from "../middleware/auth";
 const hashToken = (token: string): string =>
   crypto.createHash("sha256").update(token).digest("hex");
 
-const ACCESS_TOKEN_EXPIRY = "15m";
+const ACCESS_TOKEN_EXPIRY = "24h"; // Augmenté pour éviter expiration pendant un live
 const REFRESH_TOKEN_EXPIRY = "7d";
 
 const signAccessToken = (payload: object) => {
