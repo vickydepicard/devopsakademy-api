@@ -119,7 +119,12 @@ export const requireEnrollment = async (
       });
     }
 
-    if (!enrollment.is_approved) {
+    // Cours gratuit OU payment_status=verified → accès même si is_approved=0 (bug historique)
+    const isAccessGranted = enrollment.is_approved === 1
+      || enrollment.payment_status === 'verified'
+      || enrollment.payment_status === 'free';
+
+    if (!isAccessGranted) {
       return res.status(403).json({
         success: false,
         message: "Votre inscription est en attente de validation.",

@@ -106,17 +106,38 @@ const staticOpts = {
   },
 };
 
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads"), staticOpts));
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads"), staticOpts));
+// Servir les fichiers uploadés depuis plusieurs chemins possibles
+const uploadDirs = [
+  path.join(process.cwd(), "uploads"),
+  path.join(__dirname, "..", "uploads"),
+  path.join(__dirname, "uploads"),
+  path.resolve("uploads"),
+];
+uploadDirs.forEach(dir => {
+  if (fs.existsSync(dir)) {
+    app.use("/uploads", express.static(dir, staticOpts));
+    console.log("✅ Serving uploads from:", dir);
+  }
+});
+
+// Debug log : afficher quels dossiers uploads existent au démarrage
+const _uploadCheck = [
+  path.join(process.cwd(), "uploads"),
+  path.join(__dirname, "..", "uploads"),
+  path.join(__dirname, "uploads"),
+].map(d => `${d}: ${fs.existsSync(d) ? "EXISTS" : "NOT FOUND"}`);
+console.log("📁 Upload dirs:", _uploadCheck.join(" | "));
 
 // ✅ Fallback magic bytes pour fichiers sans extension (multer dest sans extension)
 app.use("/uploads", (req: Request, res: Response, next: NextFunction) => {
   const ext = path.extname(req.path).toLowerCase();
   if (ext) return next(); // a déjà une extension → déjà servi
 
-  const filePath = path.join(process.cwd(), "uploads", req.path);
-  const altPath  = path.join(__dirname, "..", "uploads", req.path);
-  const target   = fs.existsSync(filePath) ? filePath : fs.existsSync(altPath) ? altPath : null;
+  const filePath  = path.join(process.cwd(), "uploads", req.path);
+  const altPath   = path.join(__dirname, "..", "uploads", req.path);
+  const altPath2  = path.join(__dirname, "uploads", req.path);
+  const altPath3  = path.resolve("uploads", req.path);
+  const target    = [filePath, altPath, altPath2, altPath3].find(p => fs.existsSync(p)) || null;
   if (!target) return next();
 
   try {

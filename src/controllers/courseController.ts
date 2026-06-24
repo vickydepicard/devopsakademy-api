@@ -787,10 +787,38 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
       [courseId, courseId, lessonId, courseId]
     );
 
+    // Charger les ressources attachées à la leçon (PDFs, vidéos, slides, ZIP...)
+    const resources: any[] = await query(
+      `SELECT id, title, file_url, file_type, file_size, order_index
+       FROM lesson_resources WHERE lesson_id = ? ORDER BY order_index ASC, created_at ASC`,
+      [lessonId]
+    );
+
+    // Si la leçon n'a pas de content_url direct mais a des ressources → utiliser la première
+    const lessonData = convertBigInt(lesson);
+    if (!lessonData.content_url && resources.length > 0) {
+      const firstVideo = resources.find((r: any) =>
+        ['mp4','webm','ogg','mov'].includes(r.file_type?.toLowerCase()) ||
+        /\.(mp4|webm|ogg|mov)$/i.test(r.file_url || '')
+      );
+      const firstPdf = resources.find((r: any) =>
+        r.file_type?.toLowerCase() === 'pdf' ||
+        /\.pdf$/i.test(r.file_url || '')
+      );
+      if (firstVideo) {
+        lessonData.content_url  = firstVideo.file_url;
+        lessonData.content_type = 'video';
+      } else if (firstPdf) {
+        lessonData.content_url  = firstPdf.file_url;
+        // Garder content_type=article pour afficher le PDF inline
+      }
+    }
+
     return res.json({
       success: true,
       data: {
-        ...convertBigInt(lesson),
+        ...lessonData,
+        resources: convertBigInt(resources),
         progress: progress || {
           is_completed: 0, video_progress_seconds: 0,
           video_duration_seconds: 0, status: "not_started",
