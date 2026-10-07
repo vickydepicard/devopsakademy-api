@@ -4,8 +4,21 @@ import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
 
 /* ============================================================
- *                    🧩 UTILITAIRES
+ * UTILITAIRES
  * ============================================================ */
+/** Slug de cours unique (suffixe -2, -3… en cas de doublon) ; excludeId = cours en cours de modification. */
+const slugifyBase = (t: string) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 150) || "cours";
+const uniqueCourseSlugAdmin = async (raw: string, excludeId?: number) => {
+  const base = slugifyBase(raw);
+  for (let i = 1; i < 500; i++) {
+    const candidate = i === 1 ? base : `${base}-${i}`;
+    const rows: any[] = await query("SELECT id FROM courses WHERE slug = ? AND id <> ? LIMIT 1", [candidate, excludeId ?? 0]);
+    if (!rows.length) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+};
+
 const toNumber = (v: any) => (typeof v === "bigint" ? Number(v) : v);
 
 /**
@@ -14,6 +27,7 @@ const toNumber = (v: any) => (typeof v === "bigint" ? Number(v) : v);
  * incompatible avec JSON.stringify (Express res.json).
  */
 const sanitizeBigInt = (data: any): any => {
+  if (data instanceof Date) return data;
   if (Array.isArray(data)) return data.map(sanitizeBigInt);
   if (data !== null && typeof data === "object") {
     const out: any = {};
@@ -28,7 +42,7 @@ const sanitizeBigInt = (data: any): any => {
 };
 
 /* ============================================================
- *                    👥 UTILISATEURS
+ * UTILISATEURS
  * ============================================================ */
 export const getAllUsers = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -60,21 +74,21 @@ export const getAllUsers = async (req: AuthenticatedRequest, res: Response) => {
 
     const users = await query(sql, params);
 
-    // ✅ sanitizeBigInt convertit tous les BigInt (COUNT, UNSIGNED INT) en Number
+    // sanitizeBigInt convertit tous les BigInt (COUNT, UNSIGNED INT) en Number
     res.json({ success: true, data: sanitizeBigInt(users) });
   } catch (err) {
-    console.error("💥 getAllUsers error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllUsers error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const validateUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
     await query("UPDATE users SET is_active = 1 WHERE id = ?", [req.params.userId]);
-    res.json({ success: true, message: "✅ Utilisateur validé" });
+    res.json({ success: true, message: tr(req, "Utilisateur validé", "User approved") });
   } catch (err) {
-    console.error("💥 validateUser error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("validateUser error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -82,7 +96,7 @@ export const createUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { first_name, last_name, email, password, role } = req.body;
     if (!first_name || !last_name || !email || !password)
-      return res.status(400).json({ success: false, message: "Champs requis manquants" });
+      return res.status(400).json({ success: false, message: tr(req, "Champs requis manquants", "Required fields missing") });
 
     await query(
       `INSERT INTO users (first_name, last_name, email, password_hash, role, is_active, email_verified)
@@ -90,10 +104,10 @@ export const createUser = async (req: AuthenticatedRequest, res: Response) => {
       [first_name, last_name, email, password, role || "student"]
     );
 
-    res.json({ success: true, message: "✅ Utilisateur créé avec succès" });
+    res.json({ success: true, message: tr(req, "Utilisateur créé avec succès", "User created successfully") });
   } catch (err) {
-    console.error("💥 createUser error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createUser error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -104,25 +118,25 @@ export const updateUser = async (req: AuthenticatedRequest, res: Response) => {
       `UPDATE users SET first_name=?, last_name=?, role=?, is_active=? WHERE id=?`,
       [first_name, last_name, role, is_validated, req.params.userId]
     );
-    res.json({ success: true, message: "✅ Utilisateur mis à jour" });
+    res.json({ success: true, message: tr(req, "Utilisateur mis à jour", "User updated") });
   } catch (err) {
-    console.error("💥 updateUser error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateUser error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
     await query("DELETE FROM users WHERE id = ?", [req.params.userId]);
-    res.json({ success: true, message: "🗑️ Utilisateur supprimé" });
+    res.json({ success: true, message: tr(req, "Utilisateur supprimé", "User deleted") });
   } catch (err) {
-    console.error("💥 deleteUser error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteUser error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /**
- * 🔹 Changer le rôle / profil d’un utilisateur
+ * Changer le rôle / profil d’un utilisateur
  */
 export const changeUserRole = async (req: Request, res: Response) => {
   try {
@@ -130,19 +144,19 @@ export const changeUserRole = async (req: Request, res: Response) => {
     const { role } = req.body;
 
     if (!["admin", "instructor", "student"].includes(role))
-      return res.status(400).json({ success: false, message: "Rôle invalide" });
+      return res.status(400).json({ success: false, message: tr(req, "Rôle invalide", "Invalid role") });
 
     await query(`UPDATE users SET role=?, updated_at=NOW() WHERE id=?`, [role, id]);
 
-    res.json({ success: true, message: `✅ Rôle mis à jour : ${role}` });
+    res.json({ success: true, message: tr(req, `Rôle mis à jour : ${role}`, `Role updated: ${role}`) });
   } catch (err) {
-    console.error("💥 changeUserRole error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("changeUserRole error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /**
- * 🔹 Mettre à jour le profil d’un utilisateur (nom, email, rôle, validation)
+ * Mettre à jour le profil d’un utilisateur (nom, email, rôle, validation)
  */
 export const updateUserAdmin = async (req: Request, res: Response) => {
   try {
@@ -156,16 +170,16 @@ export const updateUserAdmin = async (req: Request, res: Response) => {
       [first_name, last_name, email, role, is_validated ? 1 : 0, id]
     );
 
-    res.json({ success: true, message: "✅ Profil utilisateur mis à jour" });
+    res.json({ success: true, message: tr(req, "Profil utilisateur mis à jour", "User profile updated") });
   } catch (err) {
-    console.error("💥 updateUserAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateUserAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 /* ============================================================
- *                    🎓 COURS (BASIQUE)
+ * COURS (BASIQUE)
  * ============================================================ */
 export const getAllCourses = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -182,8 +196,8 @@ export const getAllCourses = async (req: AuthenticatedRequest, res: Response) =>
     const data = courses.map((c: any) => ({ ...c, student_count: Number(c.student_count || 0) }));
     res.json({ success: true, data });
   } catch (err) {
-    console.error("💥 getAllCourses error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllCourses error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -191,7 +205,7 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
   try {
     const { title, description, instructor_id, is_published } = req.body;
     if (!title || !instructor_id)
-      return res.status(400).json({ success: false, message: "Titre et instructeur requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Titre et instructeur requis", "Title and instructor are required") });
 
     await query(
       `INSERT INTO courses (title, description, instructor_id, is_published)
@@ -199,10 +213,10 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
       [title, description || "", instructor_id, is_published ? 1 : 0]
     );
 
-    res.json({ success: true, message: "✅ Cours créé" });
+    res.json({ success: true, message: tr(req, "Cours créé", "Course created") });
   } catch (err) {
-    console.error("💥 createCourse error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createCourse error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -213,25 +227,25 @@ export const updateCourse = async (req: AuthenticatedRequest, res: Response) => 
       `UPDATE courses SET title=?, description=?, is_published=? WHERE id=?`,
       [title, description, is_published ? 1 : 0, req.params.courseId]
     );
-    res.json({ success: true, message: "✅ Cours mis à jour" });
+    res.json({ success: true, message: tr(req, "Cours mis à jour", "Course updated") });
   } catch (err) {
-    console.error("💥 updateCourse error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateCourse error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteCourse = async (req: AuthenticatedRequest, res: Response) => {
   try {
     await query("DELETE FROM courses WHERE id = ?", [req.params.courseId]);
-    res.json({ success: true, message: "🗑️ Cours supprimé" });
+    res.json({ success: true, message: tr(req, "Cours supprimé", "Course deleted") });
   } catch (err) {
-    console.error("💥 deleteCourse error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteCourse error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *                    🧾 INSCRIPTIONS
+ * INSCRIPTIONS
  * ============================================================ */
 export const getAllEnrollments = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -284,8 +298,8 @@ export const getAllEnrollments = async (req: AuthenticatedRequest, res: Response
       pagination: { total: Number(countRow?.total || 0), page: Number(page), limit: Number(limit) }
     });
   } catch (err) {
-    console.error("💥 getAllEnrollments error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllEnrollments error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -293,32 +307,32 @@ export const addEnrollment = async (req: AuthenticatedRequest, res: Response) =>
   try {
     const { user_id, course_id } = req.body;
     if (!user_id || !course_id)
-      return res.status(400).json({ success: false, message: "Champs requis manquants" });
+      return res.status(400).json({ success: false, message: tr(req, "Champs requis manquants", "Required fields missing") });
 
     await query(
       `INSERT INTO course_enrollments (user_id, course_id, enrolled_at, completion_percentage)
        VALUES (?, ?, NOW(), 0)`,
       [user_id, course_id]
     );
-    res.json({ success: true, message: "✅ Inscription ajoutée" });
+    res.json({ success: true, message: tr(req, "Inscription ajoutée", "Enrollment added") });
   } catch (err) {
-    console.error("💥 addEnrollment error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("addEnrollment error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteEnrollment = async (req: AuthenticatedRequest, res: Response) => {
   try {
     await query("DELETE FROM course_enrollments WHERE id = ?", [req.params.enrollmentId]);
-    res.json({ success: true, message: "🗑️ Inscription supprimée" });
+    res.json({ success: true, message: tr(req, "Inscription supprimée", "Enrollment removed") });
   } catch (err) {
-    console.error("💥 deleteEnrollment error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteEnrollment error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *                    📊 STATISTIQUES
+ * STATISTIQUES
  * ============================================================ */
 export const getGlobalStats = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -370,8 +384,8 @@ export const getGlobalStats = async (req: AuthenticatedRequest, res: Response) =
       },
     });
   } catch (err) {
-    console.error("💥 getGlobalStats error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getGlobalStats error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -388,13 +402,13 @@ export const getCourseStats = async (req: AuthenticatedRequest, res: Response) =
       data: stats.map((s: any) => ({ ...s, student_count: Number(s.student_count || 0) })),
     });
   } catch (err) {
-    console.error("💥 getCourseStats error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseStats error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *                    🧠 ADMIN AVANCÉ
+ * ADMIN AVANCÉ
  * ============================================================ */
 export const getAllCoursesAdmin = async (req: Request, res: Response) => {
   try {
@@ -410,13 +424,13 @@ export const getAllCoursesAdmin = async (req: Request, res: Response) => {
     `);
     res.json({ success: true, data: sanitizeBigInt(courses) });
   } catch (err) {
-    console.error("💥 getAllCoursesAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllCoursesAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *                    🧠 ADMIN AVANCÉ (version corrigée)
+ * ADMIN AVANCÉ (version corrigée)
  * ============================================================ */
 export const createCourseAdmin = async (req: Request, res: Response) => {
   try {
@@ -445,18 +459,18 @@ export const createCourseAdmin = async (req: Request, res: Response) => {
     if (!title || !instructor_id)
       return res
         .status(400)
-        .json({ success: false, message: "Titre et instructeur sont requis." });
+        .json({ success: false, message: tr(req, "Titre et instructeur sont requis.", "Title and instructor are required.") });
 
-    await query(
+    const created: any = await query(
       `INSERT INTO courses 
         (title, slug, description, short_description, instructor_id, category_id, 
          price, original_price, duration_hours, level, language, thumbnail_url, 
          video_preview_url, is_published, is_featured, is_free, 
-         requirements, learning_outcomes, requires_approval, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+         requirements, learning_outcomes, requires_approval, review_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         title,
-        slug || title.toLowerCase().replace(/\s+/g, "-"),
+        await uniqueCourseSlugAdmin(slug || title),
         description || "",
         short_description || "",
         instructor_id,
@@ -474,13 +488,14 @@ export const createCourseAdmin = async (req: Request, res: Response) => {
         requirements || null,
         learning_outcomes || null,
         requires_approval ? 1 : 0,
+        is_published ? "approved" : "draft",
       ]
     );
 
-    res.json({ success: true, message: "✅ Cours créé avec succès (admin)" });
+    res.json({ success: true, message: tr(req, "Cours créé avec succès (admin)", "Course created successfully (admin)"), data: { id: Number(created?.insertId) } });
   } catch (err) {
-    console.error("💥 createCourseAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur lors de la création du cours" });
+    console.error("createCourseAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la création du cours", "Error while creating the course") });
   }
 };
 
@@ -497,10 +512,10 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
     } = req.body;
 
     if (!instructor_id) {
-      return res.status(400).json({ success: false, message: "instructor_id est requis" });
+      return res.status(400).json({ success: false, message: tr(req, "instructor_id est requis", "instructor_id is required") });
     }
 
-    // ✅ requirements et learning_outcomes — éviter le double-encodage
+    // requirements et learning_outcomes — éviter le double-encodage
     const toJsonField = (val: any): string | null => {
       if (!val) return null;
       if (Array.isArray(val)) {
@@ -549,9 +564,11 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
     const reqJson = toJsonField(requirements);
     const loJson  = toJsonField(learning_outcomes);
 
-    const autoSlug = (title || "").toLowerCase()
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
+    // Le slug (URL publique) ne change que si l'admin le modifie explicitement.
+    const [existingRow]: any[] = await query("SELECT slug FROM courses WHERE id = ?", [req.params.id]);
+    const autoSlug = slug && slug !== existingRow?.slug
+      ? await uniqueCourseSlugAdmin(slug, Number(req.params.id))
+      : existingRow?.slug;
 
     await query(
       `UPDATE courses
@@ -591,9 +608,9 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
       ]
     );
 
-    res.json({ success: true, message: "✅ Cours mis à jour avec succès" });
+    res.json({ success: true, message: tr(req, "Cours mis à jour avec succès", "Course updated successfully") });
   } catch (err) {
-    console.error("💥 updateCourseAdmin error:", err);
+    console.error("updateCourseAdmin error:", err);
     res.status(500).json({ success: false, message: "Erreur mise à jour: " + (err as any)?.message });
   }
 };
@@ -602,10 +619,10 @@ export const updateCourseAdmin = async (req: Request, res: Response) => {
 export const deleteCourseAdmin = async (req: Request, res: Response) => {
   try {
     await query("DELETE FROM courses WHERE id=?", [req.params.id]);
-    res.json({ success: true, message: "🗑️ Cours supprimé (admin)" });
+    res.json({ success: true, message: tr(req, "Cours supprimé (admin)", "Course deleted (admin)") });
   } catch (err) {
-    console.error("💥 deleteCourseAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteCourseAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -613,17 +630,20 @@ export const publishCourseAdmin = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { is_published } = req.body;
-    await query("UPDATE courses SET is_published=?, updated_at=NOW() WHERE id=?", [
-      is_published ? 1 : 0,
-      id,
-    ]);
+    // La publication directe par l'admin vaut validation : le cours sort de la file « à valider ».
+    await query(
+      is_published
+        ? "UPDATE courses SET is_published=1, review_status='approved', review_note=NULL, reviewed_by=?, reviewed_at=NOW(), published_at=COALESCE(published_at, NOW()), updated_at=NOW() WHERE id=?"
+        : "UPDATE courses SET is_published=0, review_status='draft', updated_at=NOW() WHERE id=?",
+      is_published ? [(req as any).user?.id ?? null, id] : [id]
+    );
     res.json({
       success: true,
-      message: is_published ? "✅ Cours publié" : "🚫 Cours dépublié",
+      message: is_published ? tr(req, "Cours publié", "Course published") : tr(req, "Cours dépublié", "Course unpublished"),
     });
   } catch (err) {
-    console.error("💥 publishCourseAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("publishCourseAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -640,21 +660,21 @@ export const getCourseStudentsAdmin = async (req: Request, res: Response) => {
     );
     res.json({ success: true, data: students });
   } catch (err) {
-    console.error("💥 getCourseStudentsAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseStudentsAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /**
  * =============================
- * 🔍  Détail d’un cours (Admin)
+ *  Détail d’un cours (Admin)
  * =============================
  */
 export const getCourseByIdAdmin = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    // 📘 Récupération des infos principales du cours
+    // Récupération des infos principales du cours
     const [course] = await query(
       `SELECT c.*, 
               CONCAT(u.first_name, ' ', u.last_name) AS instructor_name,
@@ -667,9 +687,9 @@ export const getCourseByIdAdmin = async (req: Request, res: Response) => {
     );
 
     if (!course)
-      return res.status(404).json({ success: false, message: "Cours introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
-    // 📚 Récupération des modules et leçons liés à ce cours
+    // Récupération des modules et leçons liés à ce cours
     const modules = await query(
       `SELECT m.id, m.title, COUNT(l.id) AS lessons_count
        FROM modules m
@@ -680,7 +700,7 @@ export const getCourseByIdAdmin = async (req: Request, res: Response) => {
       [id]
     );
 
-    // 🎓 Récupération des étudiants inscrits
+    // Récupération des étudiants inscrits
     const students = await query(
       `SELECT u.id, u.first_name, u.last_name, u.email, ce.completion_percentage
        FROM course_enrollments ce
@@ -695,14 +715,14 @@ export const getCourseByIdAdmin = async (req: Request, res: Response) => {
       data: sanitizeBigInt({ ...course, modules, students }),
     });
   } catch (err) {
-    console.error("💥 getCourseByIdAdmin error:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseByIdAdmin error:", err);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 /* ============================================================
- *                    📚 LEÇONS ET RESSOURCES
+ * LEÇONS ET RESSOURCES
  * ============================================================ */
 export const getLessonsByModule = async (req: Request, res: Response) => {
   try {
@@ -718,8 +738,8 @@ export const getLessonsByModule = async (req: Request, res: Response) => {
     );
     res.json({ success: true, data: sanitizeBigInt(lessons) });
   } catch (err) {
-    console.error("💥 getLessonsByModule error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getLessonsByModule error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -727,38 +747,39 @@ export const createLesson = async (req: Request, res: Response) => {
   try {
     const { module_id, title, content_type, content_url, duration_minutes, order_index } = req.body;
     if (!module_id || !title)
-      return res.status(400).json({ success: false, message: "Champs requis manquants" });
+      return res.status(400).json({ success: false, message: tr(req, "Champs requis manquants", "Required fields missing") });
 
     await query(
       `INSERT INTO lessons (module_id, title, content_type, content_url, duration_minutes, order_index, created_at)
        VALUES (?, ?, ?, ?, ?, ?, NOW())`,
       [module_id, title, content_type || "video", content_url || "", duration_minutes || 0, order_index || 0]
     );
-    res.json({ success: true, message: "✅ Leçon créée" });
+    res.json({ success: true, message: tr(req, "Leçon créée", "Lesson created") });
   } catch (err) {
-    console.error("💥 createLesson error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createLesson error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const addLessonResource = async (req: Request, res: Response) => {
   try {
     const { lesson_id, title, file_url, file_type, file_size } = req.body;
-    await query(
+    if (!lesson_id || !file_url) return res.status(400).json({ success: false, message: tr(req, "Leçon et fichier requis", "Lesson and file are required") });
+    const added: any = await query(
       `INSERT INTO lesson_resources (lesson_id, title, file_url, file_type, file_size, created_at)
        VALUES (?, ?, ?, ?, ?, NOW())`,
-      [lesson_id, title, file_url, file_type, file_size]
+      [lesson_id, title || String(file_url).split("/").pop(), file_url, file_type || String(file_url).split(".").pop()?.slice(0, 50) || null, file_size ?? null]
     );
-    res.json({ success: true, message: "📎 Ressource ajoutée" });
+    res.json({ success: true, message: tr(req, "Ressource ajoutée", "Resource added"), data: { id: Number(added?.insertId) } });
   } catch (err) {
-    console.error("💥 addLessonResource error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("addLessonResource error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 /* ============================================================
- *                    🧱 MODULES DE COURS
+ * MODULES DE COURS
  * ============================================================ */
 export const getModulesByCourse = async (req: Request, res: Response) => {
   try {
@@ -774,26 +795,26 @@ export const getModulesByCourse = async (req: Request, res: Response) => {
     );
     res.json({ success: true, data: sanitizeBigInt(modules) });
   } catch (err) {
-    console.error("💥 getModulesByCourse error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getModulesByCourse error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const createModule = async (req: Request, res: Response) => {
   try {
-    const { course_id, title, description, order_index } = req.body;
+    const { course_id, title, description, order_index, is_published } = req.body;
     if (!course_id || !title)
-      return res.status(400).json({ success: false, message: "Champs requis manquants" });
+      return res.status(400).json({ success: false, message: tr(req, "Champs requis manquants", "Required fields missing") });
 
-    await query(
-      `INSERT INTO modules (course_id, title, description, order_index, created_at)
-       VALUES (?, ?, ?, ?, NOW())`,
-      [course_id, title, description || "", order_index || 0]
+    const result: any = await query(
+      `INSERT INTO modules (course_id, title, description, order_index, is_published, created_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [course_id, title, description || "", order_index || 0, is_published === false ? 0 : 1]
     );
-    res.json({ success: true, message: "✅ Module ajouté" });
+    res.json({ success: true, message: tr(req, "Module ajouté", "Module added"), data: { id: Number(result?.insertId) } });
   } catch (err) {
-    console.error("💥 createModule error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createModule error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -805,35 +826,35 @@ export const updateModule = async (req: Request, res: Response) => {
       `UPDATE modules SET title=?, description=?, order_index=?, updated_at=NOW() WHERE id=?`,
       [title, description, order_index || 0, id]
     );
-    res.json({ success: true, message: "✅ Module mis à jour" });
+    res.json({ success: true, message: tr(req, "Module mis à jour", "Module updated") });
   } catch (err) {
-    console.error("💥 updateModule error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateModule error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteModule = async (req: Request, res: Response) => {
   try {
     await query("DELETE FROM modules WHERE id=?", [req.params.id]);
-    res.json({ success: true, message: "🗑️ Module supprimé" });
+    res.json({ success: true, message: tr(req, "Module supprimé", "Module deleted") });
   } catch (err) {
-    console.error("💥 deleteModule error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteModule error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 
 /* ============================================================
- *                    🏷️ CATÉGORIES DE COURS
+ * CATÉGORIES DE COURS
  * ============================================================ */
 export const getAllCategories = async (req: Request, res: Response) => {
   try {
     const categories = await query("SELECT * FROM course_categories ORDER BY order_index ASC");
     res.json({ success: true, data: categories });
   } catch (err) {
-    console.error("💥 getAllCategories error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllCategories error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -841,7 +862,7 @@ export const createCategory = async (req: Request, res: Response) => {
   try {
     const { name, slug, description, color, icon } = req.body;
     if (!name)
-      return res.status(400).json({ success: false, message: "Le nom est requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Le nom est requis", "The name is required") });
 
     await query(
       `INSERT INTO course_categories (name, slug, description, color, icon, is_active, created_at)
@@ -849,10 +870,10 @@ export const createCategory = async (req: Request, res: Response) => {
       [name, slug || name.toLowerCase().replace(/\s+/g, "-"), description || "", color || "#3B82F6", icon || null]
     );
 
-    res.json({ success: true, message: "✅ Catégorie créée" });
+    res.json({ success: true, message: tr(req, "Catégorie créée", "Category created") });
   } catch (err) {
-    console.error("💥 createCategory error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createCategory error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -866,41 +887,43 @@ export const updateCategory = async (req: Request, res: Response) => {
       [name, description, color, icon, is_active ? 1 : 0, id]
     );
 
-    res.json({ success: true, message: "✅ Catégorie mise à jour" });
+    res.json({ success: true, message: tr(req, "Catégorie mise à jour", "Category updated") });
   } catch (err) {
-    console.error("💥 updateCategory error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateCategory error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteCategory = async (req: Request, res: Response) => {
   try {
     await query("DELETE FROM course_categories WHERE id=?", [req.params.id]);
-    res.json({ success: true, message: "🗑️ Catégorie supprimée" });
+    res.json({ success: true, message: tr(req, "Catégorie supprimée", "Category deleted") });
   } catch (err) {
-    console.error("💥 deleteCategory error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteCategory error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 /* ============================================================
- *                    👨‍🏫 INSTRUCTEURS (ADMIN)
+ * INSTRUCTEURS (ADMIN)
  * ============================================================ */
 export const getAllInstructors = async (req: Request, res: Response) => {
   try {
-    // ✅ Uniquement les colonnes qui existent dans la table users
+    // Uniquement les colonnes qui existent dans la table users
     const instructors = await query(`
-      SELECT id, first_name, last_name, email, role, is_active, created_at
-      FROM users
-      WHERE role IN ('instructor', 'admin')
-        AND is_active = 1
-      ORDER BY role ASC, first_name ASC
+      SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.is_active, u.created_at
+      FROM users u
+      WHERE u.is_active = 1
+        AND (u.role IN ('admin', 'superadmin')
+             OR (u.role = 'instructor'
+                 AND EXISTS (SELECT 1 FROM instructor_applications ia WHERE ia.user_id = u.id AND ia.status = 'accepted')))
+      ORDER BY u.role ASC, u.first_name ASC
     `);
     res.json({ success: true, data: sanitizeBigInt(instructors) });
   } catch (err) {
-    console.error("💥 getAllInstructors error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getAllInstructors error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -908,9 +931,9 @@ export const createInstructor = async (req: Request, res: Response) => {
   try {
     const { first_name, last_name, email, password } = req.body;
     if (!first_name || !last_name || !email || !password)
-      return res.status(400).json({ success: false, message: "Champs requis manquants" });
+      return res.status(400).json({ success: false, message: tr(req, "Champs requis manquants", "Required fields missing") });
 
-    // ✅ Utiliser password_hash (vrai nom de colonne dans users)
+    // Utiliser password_hash (vrai nom de colonne dans users)
     const bcrypt = require("bcryptjs");
     const hash = await bcrypt.hash(password, 10);
 
@@ -920,10 +943,10 @@ export const createInstructor = async (req: Request, res: Response) => {
       [first_name, last_name, email, hash]
     );
 
-    res.json({ success: true, message: "✅ Instructeur créé avec succès" });
+    res.json({ success: true, message: tr(req, "Instructeur créé avec succès", "Instructor created successfully") });
   } catch (err) {
-    console.error("💥 createInstructor error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createInstructor error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -935,46 +958,50 @@ export const updateInstructor = async (req: Request, res: Response) => {
        WHERE id=? AND role IN ('instructor','admin')`,
       [first_name, last_name, is_active ? 1 : 0, req.params.id]
     );
-    res.json({ success: true, message: "✅ Instructeur mis à jour" });
+    res.json({ success: true, message: tr(req, "Instructeur mis à jour", "Instructor updated") });
   } catch (err) {
-    console.error("💥 updateInstructor error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateInstructor error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteInstructor = async (req: Request, res: Response) => {
   try {
     await query("DELETE FROM users WHERE id=? AND role='instructor'", [req.params.id]);
-    res.json({ success: true, message: "🗑️ Instructeur supprimé" });
+    res.json({ success: true, message: tr(req, "Instructeur supprimé", "Instructor deleted") });
   } catch (err) {
-    console.error("💥 deleteInstructor error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteInstructor error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 
 /* ============================================================
- *                    🧍 PROFIL UTILISATEUR (ADMIN)
+ * PROFIL UTILISATEUR (ADMIN)
  * ============================================================ */
 export const getUserProfileAdmin = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    // 🔹 Infos principales
+    // Infos principales
     const [user] = await query(`
       SELECT id, first_name, last_name, email, role, is_active, created_at
       FROM users WHERE id = ?`, [id]);
 
     if (!user)
-      return res.status(404).json({ success: false, message: "Utilisateur introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur introuvable", "User not found") });
 
-    // 🔹 Cours enseignés (si instructeur)
+    const [profile] = await query(`
+      SELECT bio, job_title, company, country, city, github_url, linkedin_url, twitter_url, website_url, avatar_url
+      FROM user_profiles WHERE user_id = ?`, [id]);
+
+    // Cours enseignés (si instructeur)
     const teachingCourses = await query(`
       SELECT id, title, is_published, created_at
       FROM courses WHERE instructor_id = ? ORDER BY created_at DESC
     `, [id]);
 
-    // 🔹 Cours suivis (si étudiant)
+    // Cours suivis (si étudiant)
     const enrolledCourses = await query(`
       SELECT c.id, c.title, ce.completion_percentage, ce.enrolled_at
       FROM course_enrollments ce
@@ -982,7 +1009,7 @@ export const getUserProfileAdmin = async (req: Request, res: Response) => {
       WHERE ce.user_id = ? ORDER BY ce.enrolled_at DESC
     `, [id]);
 
-    // 🔹 Statistiques de progression
+    // Statistiques de progression
     const [progressStats] = await query(`
       SELECT 
         COUNT(*) AS total_enrollments,
@@ -994,20 +1021,21 @@ export const getUserProfileAdmin = async (req: Request, res: Response) => {
       success: true,
       data: {
         user,
+        profile: profile || null,
         teachingCourses,
         enrolledCourses,
         stats: progressStats || { total_enrollments: 0, avg_completion: 0 }
       }
     });
   } catch (err) {
-    console.error("💥 getUserProfileAdmin error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getUserProfileAdmin error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /**
  * =============================
- * 👤 Profil d’un utilisateur (Admin)
+ * Profil d’un utilisateur (Admin)
  * =============================
  */
 export const getUserByIdAdmin = async (req: Request, res: Response) => {
@@ -1022,10 +1050,10 @@ export const getUserByIdAdmin = async (req: Request, res: Response) => {
     );
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "Utilisateur introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur introuvable", "User not found") });
     }
 
-    // 📚 Cours suivis par cet utilisateur
+    // Cours suivis par cet utilisateur
     const enrolledCourses = await query(
       `SELECT c.id, c.title, ce.completion_percentage
        FROM course_enrollments ce
@@ -1034,7 +1062,7 @@ export const getUserByIdAdmin = async (req: Request, res: Response) => {
       [id]
     );
 
-    // 🎓 Cours enseignés (si instructeur)
+    // Cours enseignés (si instructeur)
     const taughtCourses = await query(
       `SELECT id, title, is_published
        FROM courses
@@ -1051,13 +1079,13 @@ export const getUserByIdAdmin = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    console.error("💥 getUserByIdAdmin error:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getUserByIdAdmin error:", err);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *           ✏️  UPDATE / DELETE LEÇON (admin)
+ *  UPDATE / DELETE LEÇON (admin)
  * ============================================================ */
 export const updateLesson = async (req: Request, res: Response) => {
   try {
@@ -1075,10 +1103,10 @@ export const updateLesson = async (req: Request, res: Response) => {
         order_index || 0, is_published ? 1 : 0, is_preview ? 1 : 0, id
       ]
     );
-    res.json({ success: true, message: "✅ Leçon mise à jour" });
+    res.json({ success: true, message: tr(req, "Leçon mise à jour", "Lesson updated") });
   } catch (err) {
-    console.error("💥 updateLesson error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateLesson error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1088,15 +1116,15 @@ export const deleteLesson = async (req: Request, res: Response) => {
     await query("DELETE FROM lesson_progress WHERE lesson_id = ?", [id]);
     await query("DELETE FROM lesson_resources WHERE lesson_id = ?", [id]);
     await query("DELETE FROM lessons WHERE id = ?", [id]);
-    res.json({ success: true, message: "🗑️ Leçon supprimée" });
+    res.json({ success: true, message: tr(req, "Leçon supprimée", "Lesson deleted") });
   } catch (err) {
-    console.error("💥 deleteLesson error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteLesson error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *    📎 RESSOURCES DE LEÇONS (GET + UPDATE + DELETE)
+ * RESSOURCES DE LEÇONS (GET + UPDATE + DELETE)
  * ============================================================ */
 export const getLessonResources = async (req: Request, res: Response) => {
   try {
@@ -1107,8 +1135,8 @@ export const getLessonResources = async (req: Request, res: Response) => {
     );
     res.json({ success: true, data: resources });
   } catch (err) {
-    console.error("💥 getLessonResources error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getLessonResources error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1120,25 +1148,25 @@ export const updateLessonResource = async (req: Request, res: Response) => {
       `UPDATE lesson_resources SET title=?, file_url=?, file_type=?, file_size=?, order_index=? WHERE id=?`,
       [title, file_url, file_type || null, file_size || null, order_index || 0, id]
     );
-    res.json({ success: true, message: "✅ Ressource mise à jour" });
+    res.json({ success: true, message: tr(req, "Ressource mise à jour", "Resource updated") });
   } catch (err) {
-    console.error("💥 updateLessonResource error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateLessonResource error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 export const deleteLessonResource = async (req: Request, res: Response) => {
   try {
     await query("DELETE FROM lesson_resources WHERE id=?", [req.params.id]);
-    res.json({ success: true, message: "🗑️ Ressource supprimée" });
+    res.json({ success: true, message: tr(req, "Ressource supprimée", "Resource deleted") });
   } catch (err) {
-    console.error("💥 deleteLessonResource error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteLessonResource error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *    🔄 UPDATE MODULE — champs complets (is_published inclus)
+ * UPDATE MODULE — champs complets (is_published inclus)
  * ============================================================ */
 export const updateModuleFull = async (req: Request, res: Response) => {
   try {
@@ -1148,15 +1176,15 @@ export const updateModuleFull = async (req: Request, res: Response) => {
       `UPDATE modules SET title=?, description=?, order_index=?, is_published=?, updated_at=NOW() WHERE id=?`,
       [title, description || "", order_index || 0, is_published ? 1 : 0, id]
     );
-    res.json({ success: true, message: "✅ Module mis à jour" });
+    res.json({ success: true, message: tr(req, "Module mis à jour", "Module updated") });
   } catch (err) {
-    console.error("💥 updateModuleFull error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateModuleFull error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *    📚 CREER LEÇON — champs complets avec slug auto
+ * CREER LEÇON — champs complets avec slug auto
  * ============================================================ */
 export const createLessonFull = async (req: Request, res: Response) => {
   try {
@@ -1167,7 +1195,7 @@ export const createLessonFull = async (req: Request, res: Response) => {
     } = req.body;
 
     if (!module_id || !title)
-      return res.status(400).json({ success: false, message: "module_id et title requis" });
+      return res.status(400).json({ success: false, message: tr(req, "module_id et title requis", "module_id and title are required") });
 
     // Auto-générer un slug unique
     const slug = title
@@ -1193,15 +1221,15 @@ export const createLessonFull = async (req: Request, res: Response) => {
         is_downloadable ? 1 : 0,
       ]
     );
-    res.json({ success: true, message: "✅ Leçon créée" });
+    res.json({ success: true, message: tr(req, "Leçon créée", "Lesson created") });
   } catch (err) {
-    console.error("💥 createLessonFull error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createLessonFull error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *    ✏️ UPDATE LEÇON — champs complets
+ * UPDATE LEÇON — champs complets
  * ============================================================ */
 export const updateLessonFull = async (req: Request, res: Response) => {
   try {
@@ -1216,7 +1244,7 @@ export const updateLessonFull = async (req: Request, res: Response) => {
        FROM lessons WHERE id = ?`,
       [id]
     );
-    if (!current) return res.status(404).json({ success: false, message: "Leçon introuvable" });
+    if (!current) return res.status(404).json({ success: false, message: tr(req, "Leçon introuvable", "Lesson not found") });
 
     // Fusionner : garder les valeurs actuelles si le champ n'est pas fourni (PATCH réel)
     const title            = body.title            !== undefined ? body.title            : current.title;
@@ -1240,19 +1268,21 @@ export const updateLessonFull = async (req: Request, res: Response) => {
        duration_minutes, order_index, is_published, is_preview,
        requires_completion, is_downloadable, id]
     );
-    res.json({ success: true, message: "✅ Leçon mise à jour" });
+    res.json({ success: true, message: tr(req, "Leçon mise à jour", "Lesson updated") });
   } catch (err) {
-    console.error("💥 updateLessonFull error:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateLessonFull error:", err);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
 /* ============================================================
- *   📤 UPLOAD FICHIERS (Multer — vidéos, PDFs, ressources)
+ * UPLOAD FICHIERS (Multer — vidéos, PDFs, ressources)
  * ============================================================ */
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { tr } from "../utils/lang";
+import { publicBaseUrl } from "../utils/publicUrl";
 
 const createUploadDir = (dir: string) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -1345,9 +1375,9 @@ export const uploadThumb = multer({
 export const uploadLessonVideo = async (req: Request, res: Response) => {
   try {
     const { lessonId } = req.params;
-    if (!req.file) return res.status(400).json({ success:false, message:"Aucun fichier reçu" });
+    if (!req.file) return res.status(400).json({ success:false, message:tr(req, "Aucun fichier reçu", "No file received") });
 
-    const baseUrl   = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const baseUrl   = publicBaseUrl(req);
     const fileUrl   = `${baseUrl}/uploads/lessons/videos/${req.file.filename}`;
     const fileSize  = req.file.size;
 
@@ -1359,7 +1389,7 @@ export const uploadLessonVideo = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: "✅ Vidéo uploadée et associée à la leçon",
+      message: tr(req, "Vidéo uploadée et associée à la leçon", "Video uploaded and linked to the lesson"),
       data: {
         file_url:      fileUrl,
         filename:      req.file.filename,
@@ -1369,8 +1399,8 @@ export const uploadLessonVideo = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    console.error("💥 uploadLessonVideo error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("uploadLessonVideo error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1378,9 +1408,9 @@ export const uploadLessonVideo = async (req: Request, res: Response) => {
 export const uploadLessonResource = async (req: Request, res: Response) => {
   try {
     const { lessonId } = req.params;
-    if (!req.file) return res.status(400).json({ success:false, message:"Aucun fichier reçu" });
+    if (!req.file) return res.status(400).json({ success:false, message:tr(req, "Aucun fichier reçu", "No file received") });
 
-    const baseUrl  = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const baseUrl  = publicBaseUrl(req);
     const fileUrl  = `${baseUrl}/uploads/lessons/resources/${req.file.filename}`;
     const fileSize = req.file.size;
     const fileType = path.extname(req.file.originalname).slice(1).toLowerCase();
@@ -1394,12 +1424,12 @@ export const uploadLessonResource = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: "✅ Ressource ajoutée",
+      message: tr(req, "Ressource ajoutée", "Resource added"),
       data: { file_url:fileUrl, file_type:fileType, size_mb:(fileSize/1024/1024).toFixed(2) },
     });
   } catch (err) {
-    console.error("💥 uploadLessonResource error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("uploadLessonResource error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1407,17 +1437,17 @@ export const uploadLessonResource = async (req: Request, res: Response) => {
 export const uploadCourseThumbnail = async (req: Request, res: Response) => {
   try {
     const { courseId } = req.params;
-    if (!req.file) return res.status(400).json({ success:false, message:"Aucune image reçue" });
+    if (!req.file) return res.status(400).json({ success:false, message:tr(req, "Aucune image reçue", "No image received") });
 
-    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const baseUrl = publicBaseUrl(req);
     const fileUrl = `${baseUrl}/uploads/courses/thumbnails/${req.file.filename}`;
 
     await query(`UPDATE courses SET thumbnail_url=?, updated_at=NOW() WHERE id=?`, [fileUrl, courseId]);
 
-    res.json({ success:true, message:"✅ Miniature mise à jour", data:{ file_url:fileUrl } });
+    res.json({ success:true, message:tr(req, "Miniature mise à jour", "Thumbnail updated"), data:{ file_url:fileUrl } });
   } catch (err) {
-    console.error("💥 uploadCourseThumbnail error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("uploadCourseThumbnail error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1454,10 +1484,10 @@ export const toggleModulePublish = async (req: Request, res: Response) => {
       }
     }
 
-    res.json({ success: true, message: is_published ? "✅ Module publié" : "📦 Module dépublié" });
+    res.json({ success: true, message: is_published ? "Module publié" : "Module dépublié" });
   } catch (err) {
-    console.error("💥 toggleModulePublish error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("toggleModulePublish error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1496,10 +1526,10 @@ export const toggleLessonPublish = async (req: Request, res: Response) => {
       }
     }
 
-    res.json({ success: true, message: is_published ? "✅ Leçon publiée" : "📦 Leçon dépubliée" });
+    res.json({ success: true, message: is_published ? "Leçon publiée" : "Leçon dépubliée" });
   } catch (err) {
-    console.error("💥 toggleLessonPublish error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("toggleLessonPublish error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1508,7 +1538,7 @@ export const deleteUploadedFile = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const [resource] = await query(`SELECT * FROM lesson_resources WHERE id=?`, [id]);
-    if (!resource) return res.status(404).json({ success:false, message:"Ressource introuvable" });
+    if (!resource) return res.status(404).json({ success:false, message:tr(req, "Ressource introuvable", "Resource not found") });
 
     // Supprimer le fichier local si c'est un upload local
     const fileUrl: string = resource.file_url || "";
@@ -1518,9 +1548,9 @@ export const deleteUploadedFile = async (req: Request, res: Response) => {
     }
 
     await query(`DELETE FROM lesson_resources WHERE id=?`, [id]);
-    res.json({ success:true, message:"🗑️ Ressource supprimée" });
+    res.json({ success:true, message:tr(req, "Ressource supprimée", "Resource deleted") });
   } catch (err) {
-    console.error("💥 deleteUploadedFile error:", err);
-    res.status(500).json({ success:false, message:"Erreur serveur" });
+    console.error("deleteUploadedFile error:", err);
+    res.status(500).json({ success:false, message:tr(req, "Erreur serveur", "Server error") });
   }
 };

@@ -2,6 +2,8 @@
 import { Request, Response } from "express";
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { notifyAdmins } from "../services/notification.service";
+import { tr } from "../utils/lang";
 
 // ============================================================
 // GET /api/courses/:courseId/reviews
@@ -68,7 +70,7 @@ export const getCourseReviews = async (req: Request, res: Response) => {
     });
   } catch (err) {
     console.error("getCourseReviews:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -92,7 +94,7 @@ export const getMyReview = async (req: AuthenticatedRequest, res: Response) => {
     return res.json({ success: true, data: review || null });
   } catch (err) {
     console.error("getMyReview:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -109,7 +111,7 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
     // Validation note
     const ratingNum = parseInt(rating);
     if (!ratingNum || ratingNum < 1 || ratingNum > 5) {
-      return res.status(400).json({ success: false, message: "Note invalide (1 à 5 requis)" });
+      return res.status(400).json({ success: false, message: tr(req, "Note invalide (1 à 5 requis)", "Invalid rating (1 to 5 required)") });
     }
 
     const userRole = (req as any).user?.role;
@@ -124,7 +126,7 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
     if (!enrollment && !isPrivileged) {
       return res.status(403).json({
         success: false,
-        message: "Vous devez être inscrit à ce cours pour laisser un avis.",
+        message: tr(req, "Vous devez être inscrit à ce cours pour laisser un avis.", "You must be enrolled in this course to leave a review."),
         code: "NOT_ENROLLED",
       });
     }
@@ -137,7 +139,7 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
     if (existing) {
       return res.status(409).json({
         success: false,
-        message: "Vous avez déjà soumis un avis pour ce cours. Modifiez-le si nécessaire.",
+        message: tr(req, "Vous avez déjà soumis un avis pour ce cours. Modifiez-le si nécessaire.", "You have already submitted a review for this course. Edit it if needed."),
       });
     }
 
@@ -147,6 +149,21 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
        VALUES (?, ?, ?, ?, ?, 1)`,
       [userId, courseId, enrollment?.id || null, ratingNum, comment?.trim() || null]
     );
+
+    // Notifier les admins du nouvel avis (non bloquant)
+    void (async () => {
+      const [r]: any = await query(
+        `SELECT u.first_name, u.last_name, c.title FROM users u, courses c WHERE u.id = ? AND c.id = ?`,
+        [userId, courseId]
+      );
+      await notifyAdmins({
+        type: "new_review",
+        title: `Nouvel avis ${ratingNum}/5 — ${r?.title || "cours #" + courseId}`,
+        message: `${r?.first_name || ""} ${r?.last_name || ""} : ${comment?.trim() || "(sans commentaire)"}`,
+        link: "/admin/courses",
+        data: { course_id: courseId, user_id: userId },
+      });
+    })().catch(() => {});
 
     // Mettre à jour manuellement les stats du cours (en cas de trigger défaillant)
     try {
@@ -163,12 +180,12 @@ export const submitReview = async (req: AuthenticatedRequest, res: Response) => 
 
     return res.status(201).json({
       success: true,
-      message: "Avis soumis avec succès !",
+      message: tr(req, "Avis soumis avec succès !", "Review submitted successfully!"),
       data: { id: Number(result.insertId), rating: ratingNum, comment: comment?.trim() || null },
     });
   } catch (err) {
     console.error("submitReview:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -184,7 +201,7 @@ export const updateReview = async (req: AuthenticatedRequest, res: Response) => 
 
     const ratingNum = parseInt(rating);
     if (!ratingNum || ratingNum < 1 || ratingNum > 5) {
-      return res.status(400).json({ success: false, message: "Note invalide (1 à 5 requis)" });
+      return res.status(400).json({ success: false, message: tr(req, "Note invalide (1 à 5 requis)", "Invalid rating (1 to 5 required)") });
     }
 
     const [existing]: any = await query(
@@ -192,7 +209,7 @@ export const updateReview = async (req: AuthenticatedRequest, res: Response) => 
       [userId, courseId]
     );
     if (!existing) {
-      return res.status(404).json({ success: false, message: "Aucun avis trouvé à modifier." });
+      return res.status(404).json({ success: false, message: tr(req, "Aucun avis trouvé à modifier.", "No review found to edit.") });
     }
 
     await query(
@@ -212,10 +229,10 @@ export const updateReview = async (req: AuthenticatedRequest, res: Response) => 
       );
     } catch (e) { console.warn("updateStats:", e); }
 
-    return res.json({ success: true, message: "Avis modifié avec succès." });
+    return res.json({ success: true, message: tr(req, "Avis modifié avec succès.", "Review updated successfully.") });
   } catch (err) {
     console.error("updateReview:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -233,7 +250,7 @@ export const deleteReview = async (req: AuthenticatedRequest, res: Response) => 
       [userId, courseId]
     );
     if (!existing) {
-      return res.status(404).json({ success: false, message: "Aucun avis trouvé." });
+      return res.status(404).json({ success: false, message: tr(req, "Aucun avis trouvé.", "No review found.") });
     }
 
     await query(
@@ -241,9 +258,9 @@ export const deleteReview = async (req: AuthenticatedRequest, res: Response) => 
       [userId, courseId]
     );
 
-    return res.json({ success: true, message: "Avis supprimé." });
+    return res.json({ success: true, message: tr(req, "Avis supprimé.", "Review deleted.") });
   } catch (err) {
     console.error("deleteReview:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };

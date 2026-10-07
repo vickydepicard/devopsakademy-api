@@ -3,7 +3,9 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { sendEmail, sendWelcomeEmail, sendPasswordResetEmail } from '../services/mail.service';
+import { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail, sendPasswordChangedEmail } from '../services/mail.service';
+import { langFromReq, tr, setUserLang, getUserLang } from '../utils/lang';
+import { notifyAdmins } from "../services/notification.service";
 import { query } from "../config/database";
 
 import { AuthenticatedRequest } from "../middleware/auth";
@@ -31,32 +33,35 @@ const signRefreshToken = (payload: object) => {
 export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, first_name, last_name, role = "student" } = req.body;
+    const lang = langFromReq(req);
 
     const errors: string[] = [];
-    if (!email || !email.includes("@")) errors.push("Email invalide");
+    if (!email || !email.includes("@")) errors.push(tr(req, "Email invalide", "Invalid email"));
     if (!password || password.length < 8)
-      errors.push("Le mot de passe doit contenir au moins 8 caractères");
+      errors.push(tr(req, "Le mot de passe doit contenir au moins 8 caractères", "Password must be at least 8 characters long"));
     if (!first_name || first_name.length < 2)
-      errors.push("Le prénom doit contenir au moins 2 caractères");
+      errors.push(tr(req, "Le prénom doit contenir au moins 2 caractères", "First name must be at least 2 characters long"));
     if (!last_name || last_name.length < 2)
-      errors.push("Le nom doit contenir au moins 2 caractères");
-    if (!["student", "instructor", "admin"].includes(role))
-      errors.push("Le rôle doit être student, instructor ou admin");
+      errors.push(tr(req, "Le nom doit contenir au moins 2 caractères", "Last name must be at least 2 characters long"));
+    // SÉCURITÉ : l'auto-inscription ne peut créer que des étudiants ou des candidats instructeurs.
+    // Le rôle admin ne s'attribue que depuis l'administration.
+    if (!["student", "instructor"].includes(role))
+      errors.push(tr(req, "Le rôle doit être student ou instructor", "Role must be student or instructor"));
 
     if (errors.length > 0)
       return res
         .status(400)
-        .json({ success: false, message: "Erreur de validation", errors });
+        .json({ success: false, message: tr(req, "Erreur de validation", "Validation error"), errors });
 
     const existingUsers = await query("SELECT id FROM users WHERE email = ?", [email]);
     if (existingUsers.length > 0)
       return res
         .status(400)
-        .json({ success: false, message: "Un utilisateur avec cet email existe déjà" });
+        .json({ success: false, message: tr(req, "Un utilisateur avec cet email existe déjà", "A user with this email already exists") });
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // ✅ Compte désactivé par défaut → activé après vérification email
+    // Compte désactivé par défaut → activé après vérification email
     const verifToken     = crypto.randomBytes(32).toString("hex");
     const verifTokenHash = crypto.createHash("sha256").update(verifToken).digest("hex");
     const verifExpires   = new Date(Date.now() + 24 * 3600 * 1000); // 24h
@@ -71,52 +76,38 @@ export const register = async (req: Request, res: Response) => {
     );
 
     const userId = Number(insertResult.insertId);
+    await setUserLang(userId, lang); // langue préférée (emails)
+
+    // Notifier les admins d'une nouvelle inscription (in-app + email, non bloquant)
+    void notifyAdmins({
+      type: "new_user",
+      title: "Nouvel utilisateur inscrit",
+      message: `${first_name} ${last_name} (${email}) — rôle : ${role}`,
+      link: "/admin/users",
+      data: { user_id: userId },
+    });
 
     // Créer le profil utilisateur (non bloquant)
     await query(
       "INSERT IGNORE INTO user_profiles (user_id, created_at, updated_at) VALUES (?, NOW(), NOW())",
       [userId]
-    ).catch((e: any) => console.warn("⚠️ user_profiles insert (non bloquant):", e.message));
+    ).catch((e: any) => console.warn("user_profiles insert (non bloquant):", e.message));
 
     /* =====================================================
-       📧 ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
+       ENVOI EMAIL DE BIENVENUE (NON BLOQUANT)
     ===================================================== */
-    // ✅ Email de vérification (NON BLOQUANT)
+    // Email de vérification (NON BLOQUANT)
     try {
-      const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${verifToken}`;
-      await sendEmail({
-        to: email,
-        subject: "Activez votre compte DevOpsAkademy 🚀",
-        html: `<!DOCTYPE html>
-<html><body style="font-family:Arial,sans-serif;background:#f4f3fb;padding:20px;">
-<div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(45,40,127,0.1);">
-  <div style="background:linear-gradient(135deg,#2d287f,#5653e1);padding:28px 32px;text-align:center;">
-    <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
-  </div>
-  <div style="padding:32px;">
-    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${first_name} 👋</h2>
-    <p style="color:#555;font-size:15px;">Votre compte a été créé avec succès.<br/>Cliquez sur le bouton ci-dessous pour activer votre compte :</p>
-    <div style="text-align:center;margin:28px 0;">
-      <a href="${verifyUrl}"
-        style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;
-               padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;display:inline-block;">
-        ✅ Activer mon compte
-      </a>
-    </div>
-    <p style="color:#888;font-size:13px;text-align:center;">Ce lien expire dans <strong>24 heures</strong>.<br/>Si vous n'avez pas créé ce compte, ignorez cet email.</p>
-  </div>
-</div>
-</body></html>`,
-      });
+      await sendVerificationEmail(email, first_name, verifToken, lang);
     } catch (mailError: any) {
       console.error("MAIL REGISTER ERROR:", mailError?.message || mailError);
-      // ❗ Email échoué → compte créé mais email non envoyé
+      // Email échoué → compte créé mais email non envoyé
       const instructor_temp_token2 = (role === "instructor")
         ? signAccessToken({ id: userId, role })
         : undefined;
       return res.status(201).json({
         success: true,
-        message: "Compte créé. L'email de vérification n'a pas pu être envoyé, cliquez sur 'Renvoyer'.",
+        message: tr(req, "Compte créé. L'email de vérification n'a pas pu être envoyé, cliquez sur 'Renvoyer'.", "Account created. The verification email could not be sent, click 'Resend'."),
         email_sent: false,
         instructor_temp_token: instructor_temp_token2,
         data: {
@@ -133,7 +124,7 @@ export const register = async (req: Request, res: Response) => {
 
     res.status(201).json({
       success: true,
-      message: "Compte créé avec succès ! Vérifiez votre email pour activer votre compte.",
+      message: tr(req, "Compte créé avec succès. Vérifiez votre email pour activer votre compte.", "Account created successfully. Check your email to activate your account."),
       email_sent: true,
       instructor_temp_token,
       data: {
@@ -145,7 +136,7 @@ export const register = async (req: Request, res: Response) => {
     console.error("Register error:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur interne du serveur",
+      message: tr(req, "Erreur interne du serveur", "Internal server error"),
       error:
         process.env.NODE_ENV === "development"
           ? (error as Error).message
@@ -157,21 +148,21 @@ export const register = async (req: Request, res: Response) => {
 // ---------------- LOGIN ----------------
 export const login = async (req: Request, res: Response) => {
   try {
-    // ✅ CORRECTION : le frontend envoie "password", pas "password_hash"
+    // CORRECTION : le frontend envoie "password", pas "password_hash"
     const { email, password } = req.body;
 
     if (!email || !email.includes("@"))
-      return res.status(400).json({ success: false, message: "Email invalide" });
+      return res.status(400).json({ success: false, message: tr(req, "Email invalide", "Invalid email") });
 
-    // ✅ CORRECTION : vérifier "password" (pas "password_hash")
+    // CORRECTION : vérifier "password" (pas "password_hash")
     if (!password)
-      return res.status(400).json({ success: false, message: "Mot de passe requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Mot de passe requis", "Password is required") });
 
     const users: any[] = await query("SELECT * FROM users WHERE email = ?", [email]);
     if (users.length === 0)
       return res
         .status(401)
-        .json({ success: false, message: "Email ou mot de passe incorrect" });
+        .json({ success: false, message: tr(req, "Email ou mot de passe incorrect", "Incorrect email or password") });
 
     const user = users[0];
 
@@ -179,20 +170,20 @@ export const login = async (req: Request, res: Response) => {
       if (!user.email_verified) {
         return res.status(403).json({
           success: false,
-          message: "Email non vérifié. Consultez votre boîte email pour activer votre compte.",
+          message: tr(req, "Email non vérifié. Consultez votre boîte email pour activer votre compte.", "Email not verified. Check your inbox to activate your account."),
           email_not_verified: true,
           email: user.email,
         });
       }
-      return res.status(403).json({ success: false, message: "Compte désactivé. Contactez l\'administration." });
+      return res.status(403).json({ success: false, message: tr(req, "Compte désactivé. Contactez l'administration.", "Account disabled. Please contact the administration.") });
     }
 
-    // ✅ CORRECTION : bcrypt.compare(password_en_clair, hash_en_bdd)
+    // CORRECTION : bcrypt.compare(password_en_clair, hash_en_bdd)
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     if (!isValidPassword)
       return res
         .status(401)
-        .json({ success: false, message: "Email ou mot de passe incorrect" });
+        .json({ success: false, message: tr(req, "Email ou mot de passe incorrect", "Incorrect email or password") });
 
     await query("UPDATE users SET last_login = NOW() WHERE id = ?", [user.id]);
 
@@ -227,14 +218,14 @@ export const login = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: "Connexion réussie",
+      message: tr(req, "Connexion réussie", "Login successful"),
       data: { user: userData, accessToken, refreshToken },
     });
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur interne du serveur",
+      message: tr(req, "Erreur interne du serveur", "Internal server error"),
       error:
         process.env.NODE_ENV === "development"
           ? (error as Error).message
@@ -253,7 +244,7 @@ export const refreshToken = async (req: Request, res: Response) => {
     if (!providedToken) {
       return res
         .status(400)
-        .json({ success: false, message: "Refresh token requis" });
+        .json({ success: false, message: tr(req, "Refresh token requis", "Refresh token required") });
     }
 
     const rows: any[] = await query("SELECT * FROM refresh_tokens WHERE token_hash = ?", [
@@ -262,7 +253,7 @@ export const refreshToken = async (req: Request, res: Response) => {
     if (rows.length === 0) {
       return res
         .status(403)
-        .json({ success: false, message: "Refresh token invalide" });
+        .json({ success: false, message: tr(req, "Refresh token invalide", "Invalid refresh token") });
     }
 
     jwt.verify(
@@ -273,7 +264,7 @@ export const refreshToken = async (req: Request, res: Response) => {
           await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(403)
-            .json({ success: false, message: "Refresh token invalide ou expiré" });
+            .json({ success: false, message: tr(req, "Refresh token invalide ou expiré", "Invalid or expired refresh token") });
         }
 
         const userId = Number(decoded.id);
@@ -285,13 +276,13 @@ export const refreshToken = async (req: Request, res: Response) => {
           await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(404)
-            .json({ success: false, message: "Utilisateur introuvable" });
+            .json({ success: false, message: tr(req, "Utilisateur introuvable", "User not found") });
         }
         if (!dbUser.is_active) {
           await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
           return res
             .status(403)
-            .json({ success: false, message: "Compte utilisateur désactivé" });
+            .json({ success: false, message: tr(req, "Compte utilisateur désactivé", "User account disabled") });
         }
 
         await query("DELETE FROM refresh_tokens WHERE token_hash = ?", [hashToken(providedToken)]);
@@ -319,7 +310,7 @@ export const refreshToken = async (req: Request, res: Response) => {
     console.error("Refresh token error:", error);
     res
       .status(500)
-      .json({ success: false, message: "Erreur lors du rafraîchissement du token" });
+      .json({ success: false, message: tr(req, "Erreur lors du rafraîchissement du token", "Error while refreshing the token") });
   }
 };
 
@@ -335,12 +326,12 @@ export const logout = async (req: Request, res: Response) => {
     }
 
     res.clearCookie("refreshToken", { httpOnly: true, sameSite: "lax" });
-    res.json({ success: true, message: "Déconnecté avec succès" });
+    res.json({ success: true, message: tr(req, "Déconnecté avec succès", "Logged out successfully") });
   } catch (error) {
     console.error("Logout error:", error);
     res
       .status(500)
-      .json({ success: false, message: "Erreur lors de la déconnexion" });
+      .json({ success: false, message: tr(req, "Erreur lors de la déconnexion", "Error while logging out") });
   }
 };
 
@@ -351,7 +342,7 @@ export const getCurrentUser = async (req: Request, res: Response) => {
     if (!userId)
       return res
         .status(401)
-        .json({ success: false, message: "Utilisateur non authentifié" });
+        .json({ success: false, message: tr(req, "Utilisateur non authentifié", "User not authenticated") });
 
     const [userProfile]: any = await query(
       `SELECT 
@@ -368,7 +359,7 @@ export const getCurrentUser = async (req: Request, res: Response) => {
     if (!userProfile)
       return res
         .status(404)
-        .json({ success: false, message: "Utilisateur non trouvé" });
+        .json({ success: false, message: tr(req, "Utilisateur non trouvé", "User not found") });
 
     delete userProfile.password_hash;
 
@@ -377,7 +368,7 @@ export const getCurrentUser = async (req: Request, res: Response) => {
     console.error("Get current user error:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur interne du serveur",
+      message: tr(req, "Erreur interne du serveur", "Internal server error"),
       error:
         process.env.NODE_ENV === "development"
           ? (error as Error).message
@@ -394,7 +385,7 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Utilisateur non authentifié",
+        message: tr(req, "Utilisateur non authentifié", "User not authenticated"),
       });
     }
 
@@ -438,7 +429,7 @@ export const getDashboard = async (req: AuthenticatedRequest, res: Response) => 
     console.error("Erreur dashboard:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur lors de la récupération du dashboard",
+      message: tr(req, "Erreur lors de la récupération du dashboard", "Error while retrieving the dashboard"),
     });
   }
 };
@@ -452,12 +443,12 @@ export const verifyEmail = async (req: Request, res: Response) => {
   try {
     const { token } = req.params;
     if (!token) {
-      return res.status(400).json({ success: false, message: "Token manquant" });
+      return res.status(400).json({ success: false, message: tr(req, "Token manquant", "Missing token") });
     }
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
-    // ✅ FIX : sans AND is_active = FALSE
+    // FIX : sans AND is_active = FALSE
     // Cherche par token, gère les 4 cas : déjà activé, expiré, invalide, activation fraîche
     const [user]: any = await query(
       `SELECT id, first_name, email, is_active, email_verified, verification_token_expires
@@ -472,7 +463,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.json({
         success: true,
         already_active: true,
-        message: "Votre compte est déjà activé ! Vous pouvez vous connecter.",
+        message: tr(req, "Votre compte est déjà activé. Vous pouvez vous connecter.", "Your account is already activated. You can log in."),
       });
     }
 
@@ -481,7 +472,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.json({
         success: true,
         already_active: true,
-        message: "Votre compte est déjà activé ! Vous pouvez vous connecter.",
+        message: tr(req, "Votre compte est déjà activé. Vous pouvez vous connecter.", "Your account is already activated. You can log in."),
       });
     }
 
@@ -490,11 +481,11 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         expired: true,
-        message: "Ce lien a expiré. Demandez un nouveau lien de vérification.",
+        message: tr(req, "Ce lien a expiré. Demandez un nouveau lien de vérification.", "This link has expired. Request a new verification link."),
       });
     }
 
-    // ✅ Activer le compte (garde le token pour les re-clics futurs)
+    // Activer le compte (garde le token pour les re-clics futurs)
     await query(
       `UPDATE users
        SET is_active = TRUE, email_verified = TRUE,
@@ -505,16 +496,16 @@ export const verifyEmail = async (req: Request, res: Response) => {
     );
 
     // Email de bienvenue après activation
-    await sendWelcomeEmail(user.email, user.first_name)
+    await sendWelcomeEmail(user.email, user.first_name, await getUserLang(user.id, langFromReq(req)))
       .catch(e => console.warn("Email bienvenue:", e.message));
 
     return res.json({
       success: true,
-      message: "Compte activé avec succès ! Vous pouvez maintenant vous connecter.",
+      message: tr(req, "Compte activé avec succès. Vous pouvez maintenant vous connecter.", "Account activated successfully. You can now log in."),
     });
   } catch (error) {
     console.error("verifyEmail error:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -526,10 +517,10 @@ export const resendVerification = async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
     if (!email) {
-      return res.status(400).json({ success: false, message: "Email requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Email requis", "Email is required") });
     }
 
-    const OK = { success: true, message: "Si un compte non vérifié existe, un email a été envoyé." };
+    const OK = { success: true, message: tr(req, "Si un compte non vérifié existe, un email a été envoyé.", "If an unverified account exists, an email has been sent.") };
 
     const [user]: any = await query(
       "SELECT id, first_name, email, is_active, email_verified FROM users WHERE email = ? LIMIT 1",
@@ -550,25 +541,16 @@ export const resendVerification = async (req: Request, res: Response) => {
       [newTokenHash, newExpires.toISOString().slice(0, 19).replace("T", " "), user.id]
     );
 
-const verifyUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/verify-email/${newToken}`;
-
-await sendEmail({
-  to: user.email,
-  subject: "Activez votre compte DevOpsAkademy",
-  html: `<p>Bonjour <strong>${user.first_name}</strong>,</p>
-         <p>
-           <a href="${verifyUrl}" 
-              style="background:#2d287f;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700;">
-              ✅ Activer mon compte
-           </a>
-         </p>
-         <p style="color:#888;font-size:12px;">Expire dans 24h.</p>`,
-}).catch(e => console.warn("Resend verification:", e.message));
+    // La langue choisie sur le site prime ; elle est mémorisée pour les prochains emails
+    const resendLang = langFromReq(req);
+    await setUserLang(user.id, resendLang);
+    await sendVerificationEmail(user.email, user.first_name, newToken, resendLang)
+      .catch(e => console.warn("Resend verification:", e.message));
 
     return res.json(OK);
   } catch (error) {
     console.error("resendVerification error:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -580,11 +562,11 @@ export const forgotPassword = async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
     if (!email || !email.includes("@")) {
-      return res.status(400).json({ success: false, message: "Email invalide" });
+      return res.status(400).json({ success: false, message: tr(req, "Email invalide", "Invalid email") });
     }
 
     // Réponse générique → ne révèle pas si l'email existe
-    const OK = { success: true, message: "Si un compte existe, un email a été envoyé." };
+    const OK = { success: true, message: tr(req, "Si un compte existe, un email a été envoyé.", "If an account exists, an email has been sent.") };
 
     const [user]: any = await query(
       "SELECT id, first_name, email, is_active FROM users WHERE email = ? LIMIT 1",
@@ -610,13 +592,14 @@ export const forgotPassword = async (req: Request, res: Response) => {
     );
 
     // Envoyer l'email
-    await sendPasswordResetEmail(user.email, user.first_name, rawToken)
-      .catch(e => console.warn("⚠️ Email reset (non bloquant):", e.message));
+    await setUserLang(user.id, langFromReq(req));
+    await sendPasswordResetEmail(user.email, user.first_name, rawToken, langFromReq(req))
+      .catch(e => console.warn("Email reset (non bloquant):", e.message));
 
     return res.json(OK);
   } catch (error) {
     console.error("forgotPassword error:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -629,10 +612,10 @@ export const resetPassword = async (req: Request, res: Response) => {
     const { token, password } = req.body;
 
     if (!token || !password) {
-      return res.status(400).json({ success: false, message: "Token et mot de passe requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Token et mot de passe requis", "Token and password are required") });
     }
     if (password.length < 8) {
-      return res.status(400).json({ success: false, message: "Minimum 8 caractères requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Minimum 8 caractères requis", "At least 8 characters required") });
     }
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
@@ -652,7 +635,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     if (!row) {
       return res.status(400).json({
         success: false,
-        message: "Lien invalide ou expiré. Refaites une demande.",
+        message: tr(req, "Lien invalide ou expiré. Refaites une demande.", "Invalid or expired link. Please make a new request."),
       });
     }
 
@@ -670,19 +653,13 @@ export const resetPassword = async (req: Request, res: Response) => {
     await query("DELETE FROM refresh_tokens WHERE user_id = ?", [row.user_id]).catch(() => {});
 
     // Email de confirmation
-    await sendEmail({
-      to: row.email,
-      subject: "Mot de passe modifié — DevOpsAkademy",
-      html: `<p>Bonjour <strong>${row.first_name}</strong>,</p>
-             <p>Votre mot de passe a été modifié avec succès.</p>
-             <p>Si ce n'est pas vous, contactez-nous à support@devopsakademy.com</p>
-             <p>— L'équipe DevOpsAkademy</p>`,
-    }).catch(e => console.warn("Email confirm reset:", e.message));
+    await sendPasswordChangedEmail(row.email, row.first_name, langFromReq(req))
+      .catch(e => console.warn("Email confirm reset:", e.message));
 
-    return res.json({ success: true, message: "Mot de passe mis à jour." });
+    return res.json({ success: true, message: tr(req, "Mot de passe mis à jour.", "Password updated.") });
   } catch (error) {
     console.error("resetPassword error:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -723,7 +700,7 @@ export const resetPassword = async (req: Request, res: Response) => {
           success: false,
           message: "Votre email n'est pas encore vérifié. Consultez votre boîte email ou cliquez sur « Renvoyer l'email ».",
           email_not_verified: true,
-          can_resend: true,          // ✅ AJOUT — flag explicite
+          can_resend: true,          // AJOUT — flag explicite
           email: user.email,
         });
       }
@@ -747,14 +724,14 @@ function buildVerificationEmail(firstName: string, verifyUrl: string): string {
     <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
   </div>
   <div style="padding:32px;">
-    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${firstName} 👋</h2>
+    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${firstName}</h2>
     <p style="color:#555;font-size:15px;">Votre compte a été créé avec succès.<br/>
     Cliquez sur le bouton ci-dessous pour activer votre compte :</p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${verifyUrl}"
         style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;
                padding:14px 32px;border-radius:12px;font-weight:700;font-size:15px;display:inline-block;">
-        ✅ Activer mon compte
+        Activer mon compte
       </a>
     </div>
     <p style="color:#888;font-size:13px;text-align:center;">
@@ -767,7 +744,7 @@ function buildVerificationEmail(firstName: string, verifyUrl: string): string {
 </html>`;
 }
 
-// ✅ Export par défaut
+// Export par défaut
 export default {
   register,
   login,

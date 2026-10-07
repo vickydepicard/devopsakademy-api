@@ -18,6 +18,7 @@ import {
 import { authenticate } from '../middleware/auth';
 import { requireAuth } from '../middleware/permissions';
 import { query } from '../config/database';
+import { tr } from "../utils/lang";
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ router.get ('/me',     authenticate, getCurrentUser);
 router.get ('/dashboard', requireAuth, getDashboard);
 
 // ════════════════════════════════════════════════════════════
-// 🔧 ROUTES DE DEBUG TEMPORAIRES — SUPPRIMER EN PRODUCTION
+// ROUTES DE DEBUG TEMPORAIRES — SUPPRIMER EN PRODUCTION
 // ════════════════════════════════════════════════════════════
 
 // GET /api/auth/debug-token/:token
@@ -101,7 +102,7 @@ router.post('/debug-activate', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Compte activé manuellement',
+      message: tr(req, "Compte activé manuellement", "Account activated manually"),
       user: users[0] || null,
     });
   } catch (err: any) {

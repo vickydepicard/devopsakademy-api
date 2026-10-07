@@ -4,25 +4,29 @@ import {
   createContact,
   getContacts,
   getContactById,
+  deleteContact,
+  setContactHandled,
 } from "../controllers/contactController";
 import {
   uploadPaymentProof,
-} from "../controllers/enrollmentController"; // ✅ chemin corrigé
+} from "../controllers/enrollmentController"; // chemin corrigé
 import { authenticate, authorizeRoles } from "../middleware/auth";
 
 const router = express.Router();
 
-// 🧩 Configuration du stockage de fichiers
+// Configuration du stockage de fichiers
 const upload = multer({ dest: "uploads/payments/" });
 
-// ✅ Routes publiques
+// Routes publiques
 router.post("/", createContact);
 
-// ✅ Routes protégées (Admin)
+// Routes protégées (Admin)
 router.get("/", authenticate, authorizeRoles(["admin"]), getContacts);
 router.get("/:id", authenticate, authorizeRoles(["admin"]), getContactById);
+router.patch("/:id/handled", authenticate, authorizeRoles(["admin"]), setContactHandled);
+router.delete("/:id", authenticate, authorizeRoles(["admin"]), deleteContact);
 
-// ✅ Upload preuve de paiement (étudiant)
+// Upload preuve de paiement (étudiant)
 router.post(
   "/:courseId/upload-proof",
   authenticate,

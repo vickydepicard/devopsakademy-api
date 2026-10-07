@@ -9,7 +9,7 @@ export interface Contact {
   created_at?: Date;
 }
 
-// ➕ Créer un contact
+// Créer un contact
 export const createContact = async (contact: Contact): Promise<any> => {
   const sql = `
     INSERT INTO contacts (name, email, subject, message, created_at)
@@ -19,13 +19,13 @@ export const createContact = async (contact: Contact): Promise<any> => {
   return query(sql, params);
 };
 
-// 📋 Récupérer tous les contacts
+// Récupérer tous les contacts
 export const getAllContacts = async (): Promise<Contact[]> => {
   const sql = `SELECT * FROM contacts ORDER BY created_at DESC`;
   return query(sql);
 };
 
-// 🔍 Récupérer un contact par ID
+// Récupérer un contact par ID
 export const getContactById = async (id: number): Promise<Contact | null> => {
   const sql = `SELECT * FROM contacts WHERE id = ?`;
   const result = await query(sql, [id]);

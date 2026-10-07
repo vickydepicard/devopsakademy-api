@@ -1,24 +1,22 @@
 import express from 'express';
-import { 
-  getCategories, 
-  getThreads, 
-  createThread, 
-  getThreadById, 
-  createMessage 
+import {
+  getCategories, getThreads, createThread, getThreadById, createMessage,
+  deleteThread, deletePost, updateThread,
 } from '../controllers/forumController';
-import { authenticate } from '../middleware/auth';
+import { authenticate, optionalAuthenticate } from '../middleware/auth';
 
 const router = express.Router();
 
-// Routes publiques
+// Lecture publique (le visiteur peut lire, pas écrire)
 router.get('/categories', getCategories);
-router.get('/threads', getThreads);
+router.get('/threads', optionalAuthenticate, getThreads);
+router.get('/threads/:id', optionalAuthenticate, getThreadById);
 
-// Routes protégées
-router.use(authenticate);
-
-router.post('/threads', createThread);
-router.get('/threads/:id', getThreadById);
-router.post('/threads/:id/messages', createMessage);
+// Écriture : connecté
+router.post('/threads', authenticate, createThread);
+router.post('/threads/:id/messages', authenticate, createMessage);
+router.patch('/threads/:id', authenticate, updateThread);
+router.delete('/threads/:id', authenticate, deleteThread);
+router.delete('/posts/:id', authenticate, deletePost);
 
 export default router;

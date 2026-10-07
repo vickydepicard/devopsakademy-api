@@ -1,24 +1,28 @@
 // src/controllers/enrollmentController.ts
 import { Request, Response } from 'express'
+import { recordCommissionsForEnrollment, voidCommissionsForEnrollment } from '../services/commission.service'
 import { sendPaymentReceivedEmail } from '../services/mail.service';
+import { getUserLang, langFromReq } from '../utils/lang';
+import { notifyAdmins } from "../services/notification.service";
 import { query } from '../config/database'
 import { AuthenticatedRequest } from '../middleware/auth'
+import { tr } from "../utils/lang";
 
 // POST /api/enrollments
 export const enroll = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
     const userId = authReq.user?.id
-    if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
     const { course_id } = req.body
-    if (!course_id) return res.status(400).json({ success: false, message: 'course_id requis' })
+    if (!course_id) return res.status(400).json({ success: false, message: tr(req, "course_id requis", "course_id required") })
 
     const courses: any[] = await query(
       'SELECT id, title, price, is_free, requires_approval FROM courses WHERE id = ? AND is_published = 1',
       [course_id]
     )
-    if (!courses.length) return res.status(404).json({ success: false, message: 'Cours introuvable' })
+    if (!courses.length) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") })
 
     const course = courses[0]
     const existing: any[] = await query(
@@ -26,7 +30,7 @@ export const enroll = async (req: Request, res: Response) => {
       [userId, course_id]
     )
     if (existing.length)
-      return res.status(409).json({ success: false, message: 'Déjà inscrit', data: existing[0] })
+      return res.status(409).json({ success: false, message: tr(req, "Déjà inscrit", "Already enrolled"), data: existing[0] })
 
     const isFree = course.is_free === 1 || Number(course.price) === 0
     const paymentStatus = isFree ? 'free' : 'pending'
@@ -38,6 +42,18 @@ export const enroll = async (req: Request, res: Response) => {
       [userId, course_id, isFree ? 'free' : 'individual', paymentStatus, isApproved]
     )
 
+    // Notifier les admins d'une inscription (non bloquant)
+    void (async () => {
+      const [u]: any = await query('SELECT first_name, last_name, email FROM users WHERE id = ?', [userId]);
+      await notifyAdmins({
+        type: 'new_enrollment',
+        title: isFree ? 'Nouvelle inscription (cours gratuit)' : 'Nouvelle inscription — paiement attendu',
+        message: `${u?.first_name || ''} ${u?.last_name || ''} (${u?.email || '—'}) s'est inscrit(e) à « ${course.title} ».`,
+        link: '/admin/enrollments',
+        data: { course_id: Number(course_id), user_id: userId },
+      });
+    })().catch(() => {});
+
     return res.status(201).json({
       success: true,
       message: isFree ? 'Inscription réussie — accès immédiat' : 'Inscription créée — en attente de paiement',
@@ -45,7 +61,7 @@ export const enroll = async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error('enroll error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 export const enrollInCourse = enroll
@@ -55,32 +71,32 @@ export const unenrollFromCourse = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
     const userId = authReq.user?.id
-    if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
     const enrollmentId = Number(req.params.id)
     const rows: any[] = await query(
       'SELECT id FROM course_enrollments WHERE id = ? AND user_id = ?',
       [enrollmentId, userId]
     )
-    if (!rows.length) return res.status(404).json({ success: false, message: 'Inscription introuvable' })
+    if (!rows.length) return res.status(404).json({ success: false, message: tr(req, "Inscription introuvable", "Enrollment not found") })
 
     await query('DELETE FROM course_enrollments WHERE id = ?', [enrollmentId])
-    return res.json({ success: true, message: 'Désinscription effectuée' })
+    return res.json({ success: true, message: tr(req, "Désinscription effectuée", "Unenrollment completed") })
   } catch (error) {
     console.error('unenrollFromCourse error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/enrollments/me
-// ✅ Inclut total_lessons + completed_lessons calculés en live
+// Inclut total_lessons + completed_lessons calculés en live
 // ─────────────────────────────────────────────────────────────
 export const getMyEnrollments = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
     const userId = authReq.user?.id
-    if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
     const enrollments: any[] = await query(
       `SELECT
@@ -105,7 +121,7 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
          c.is_free,
          cat.name AS category_name,
 
-         -- ✅ Leçons publiées uniquement (respecte dépublication modules/leçons)
+         -- Leçons publiées uniquement (respecte dépublication modules/leçons)
          (
            SELECT COUNT(l.id)
            FROM lessons l
@@ -115,7 +131,7 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
              AND m.is_published = 1
          ) AS total_lessons,
 
-         -- ✅ Leçons complétées sur les leçons publiées seulement
+         -- Leçons complétées sur les leçons publiées seulement
          (
            SELECT COUNT(lp.id)
            FROM lesson_progress lp
@@ -175,7 +191,7 @@ export const getMyEnrollments = async (req: Request, res: Response) => {
     return res.json({ success: true, data: enriched })
   } catch (error) {
     console.error('getMyEnrollments error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 export const getUserEnrollments = getMyEnrollments
@@ -185,7 +201,7 @@ export const getEnrollmentStatus = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
     const userId = authReq.user?.id
-    if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
     const courseId = Number(req.params.courseId)
     const rows: any[] = await query(
@@ -195,7 +211,7 @@ export const getEnrollmentStatus = async (req: Request, res: Response) => {
     return res.json({ success: true, data: rows.length ? rows[0] : null })
   } catch (error) {
     console.error('getEnrollmentStatus error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 export const checkEnrollment      = getEnrollmentStatus
@@ -206,18 +222,18 @@ export const submitPayment = async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthenticatedRequest
     const userId = authReq.user?.id
-    if (!userId) return res.status(401).json({ success: false, message: 'Non authentifié' })
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
-    // ✅ Accepte courseId (route /:courseId/upload-proof) OU enrollmentId
+    // Accepte courseId (route /:courseId/upload-proof) OU enrollmentId
     const courseId     = Number(req.params.courseId)
     const enrollmentId = Number(req.params.enrollmentId)
     const { amount, payment_method, reference } = req.body
 
     // payment_method requis (amount et proof_url peuvent venir du fichier ou être calculés)
     if (!payment_method)
-      return res.status(400).json({ success: false, message: 'payment_method requis' })
+      return res.status(400).json({ success: false, message: tr(req, "payment_method requis", "payment_method required") })
 
-    // ✅ Chercher l'inscription par courseId OU enrollmentId
+    // Chercher l'inscription par courseId OU enrollmentId
     const whereClause = courseId && !isNaN(courseId)
       ? 'WHERE ce.course_id = ? AND ce.user_id = ?'
       : 'WHERE ce.id = ? AND ce.user_id = ?'
@@ -230,14 +246,14 @@ export const submitPayment = async (req: Request, res: Response) => {
       whereParam
     )
     if (!enrollments.length)
-      return res.status(404).json({ success: false, message: 'Inscription introuvable. Inscrivez-vous dabord.' })
+      return res.status(404).json({ success: false, message: tr(req, "Inscription introuvable. Inscrivez-vous dabord.", "Enrollment not found. Please enroll first.") })
     if (enrollments[0].payment_status === 'verified')
-      return res.status(400).json({ success: false, message: 'Paiement déjà validé' })
+      return res.status(400).json({ success: false, message: tr(req, "Paiement déjà validé", "Payment already approved") })
 
     const actualEnrollmentId = enrollments[0].id
     const actualAmount       = Number(amount) || Number(enrollments[0].price) || 0
 
-    // ✅ URL preuve: fichier uploadé (multer) OU champ JSON
+    // URL preuve: fichier uploadé (multer) OU champ JSON
     const fileUploaded = (req as any).file
     const actualProofUrl = fileUploaded
       ? `/uploads/payments/${fileUploaded.filename}`
@@ -265,7 +281,7 @@ export const submitPayment = async (req: Request, res: Response) => {
       [actualProofUrl, actualEnrollmentId]
     )
 
-    // ✅ Email de confirmation de réception de la preuve
+    // Email de confirmation de réception de la preuve
     try {
       const [userRow]: any = await query(
         'SELECT first_name, email FROM users WHERE id = ?', [userId]
@@ -274,25 +290,34 @@ export const submitPayment = async (req: Request, res: Response) => {
         'SELECT title, price FROM courses WHERE id = ?', [enrollments[0].course_id]
       );
       if (userRow && courseRow) {
+        // Notifier les admins : preuve à valider (non bloquant)
+        void notifyAdmins({
+          type: "payment_proof",
+          title: "Preuve de paiement à valider",
+          message: `${userRow.first_name} (${userRow.email}) a envoyé une preuve de paiement pour « ${courseRow.title} » — ${(Number(courseRow.price) || actualAmount).toLocaleString("fr-FR")} XAF (${payment_method}).`,
+          link: "/admin/enrollments",
+          data: { enrollment_id: actualEnrollmentId, course_id: enrollments[0].course_id, user_id: userId },
+        });
         await sendPaymentReceivedEmail(
           userRow.email,
           userRow.first_name,
           courseRow.title,
-          Number(courseRow.price) || actualAmount
-        ).catch(e => console.warn("⚠️ Email preuve non bloquant:", e.message));
+          Number(courseRow.price) || actualAmount,
+          await getUserLang(userId, langFromReq(req))
+        ).catch(e => console.warn("Email preuve non bloquant:", e.message));
       }
     } catch (emailErr) {
-      console.warn("⚠️ Email non bloquant:", emailErr);
+      console.warn("Email non bloquant:", emailErr);
     }
 
     return res.json({
       success: true,
-      message: 'Preuve soumise avec succès — validation sous 24h ouvrées',
+      message: tr(req, "Preuve soumise avec succès — validation sous 24h ouvrées", "Proof submitted successfully — approval within 24 business hours"),
       data: { enrollment_id: actualEnrollmentId, payment_status: 'pending' },
     })
   } catch (error) {
     console.error('submitPayment error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 export const uploadPaymentProof = submitPayment
@@ -313,7 +338,7 @@ export const getCourseStudents = async (req: Request, res: Response) => {
     return res.json({ success: true, data: students })
   } catch (error) {
     console.error('getCourseStudents error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 
@@ -331,7 +356,7 @@ export const getAllEnrollments = async (req: Request, res: Response) => {
     return res.json({ success: true, data: rows })
   } catch (error) {
     console.error('getAllEnrollments error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 
@@ -344,24 +369,48 @@ export const validateEnrollment = async (req: Request, res: Response) => {
       `UPDATE course_enrollments SET is_approved = ?, payment_status = ?, approved_at = NOW() WHERE id = ?`,
       [approved ? 1 : 0, approved ? 'verified' : 'rejected', enrollmentId]
     )
-    return res.json({ success: true, message: approved ? 'Inscription approuvée' : 'Inscription rejetée' })
+    if (approved) await recordCommissionsForEnrollment(enrollmentId)
+    else await voidCommissionsForEnrollment(enrollmentId)
+    return res.json({ success: true, message: approved ? tr(req, "Inscription approuvée", "Enrollment approved") : tr(req, "Inscription rejetée", "Enrollment rejected") })
   } catch (error) {
     console.error('validateEnrollment error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 export const validatePayment        = validateEnrollment
-export const adminApproveEnrollment = validateEnrollment
+
+// PATCH /api/enrollments/:userId/:courseId/approve  (admin) — approuve l'inscription d'un étudiant à un cours
+export const adminApproveEnrollment = async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params.userId)
+    const courseId = Number(req.params.courseId)
+    if (!Number.isInteger(userId) || !Number.isInteger(courseId)) {
+      return res.status(400).json({ success: false, message: tr(req, "Paramètres invalides", "Invalid parameters") })
+    }
+    const [row]: any = await query('SELECT id FROM course_enrollments WHERE user_id = ? AND course_id = ?', [userId, courseId])
+    if (!row) return res.status(404).json({ success: false, message: tr(req, "Inscription introuvable", "Enrollment not found") })
+    const enrollmentId = Number(row.id)
+    await query(
+      `UPDATE course_enrollments SET is_approved = 1, payment_status = 'verified', approved_at = NOW() WHERE id = ?`,
+      [enrollmentId]
+    )
+    await recordCommissionsForEnrollment(enrollmentId)
+    return res.json({ success: true, message: tr(req, "Inscription approuvée", "Enrollment approved") })
+  } catch (error) {
+    console.error('adminApproveEnrollment error:', error)
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
+  }
+}
 
 // DELETE /api/enrollments/:id  (admin)
 export const adminDeleteEnrollment = async (req: Request, res: Response) => {
   try {
     const enrollmentId = Number(req.params.id)
     await query('DELETE FROM course_enrollments WHERE id = ?', [enrollmentId])
-    return res.json({ success: true, message: 'Inscription supprimée' })
+    return res.json({ success: true, message: tr(req, "Inscription supprimée", "Enrollment removed") })
   } catch (error) {
     console.error('adminDeleteEnrollment error:', error)
-    return res.status(500).json({ success: false, message: 'Erreur interne du serveur' })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne du serveur", "Internal server error") })
   }
 }
 
@@ -377,10 +426,10 @@ export const rejectEnrollment = async (req: any, res: any) => {
        WHERE user_id = ? AND course_id = ?`,
       [reason, userId, courseId]
     );
-    return res.json({ success: true, message: "Inscription rejetée" });
+    return res.json({ success: true, message: tr(req, "Inscription rejetée", "Enrollment rejected") });
   } catch (err) {
     console.error("rejectEnrollment:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -406,7 +455,7 @@ export const getEnrollmentsByUser = async (req: any, res: any) => {
     return res.json({ success: true, data: rows });
   } catch (err) {
     console.error("getEnrollmentsByUser:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -420,7 +469,8 @@ export const approveEnrollmentById = async (req: any, res: any) => {
        WHERE id = ?`,
       [id]
     );
-    // ✅ Email de validation
+    await recordCommissionsForEnrollment(Number(id)); // gains instructeur (idempotent, non bloquant)
+    // Email de validation
     try {
       const [row]: any = await query(
         `SELECT u.first_name, u.email, c.title, c.id AS course_id
@@ -431,14 +481,14 @@ export const approveEnrollmentById = async (req: any, res: any) => {
       );
       if (row) {
         const { sendPaymentApprovedEmail } = await import('../services/mail.service');
-        await sendPaymentApprovedEmail(row.email, row.first_name, row.title, Number(row.course_id))
+        await sendPaymentApprovedEmail(row.email, row.first_name, row.title, Number(row.course_id), await getUserLang(row.email))
           .catch(e => console.warn("Email approve:", e.message));
       }
     } catch(e) { console.warn("Email approve:", e); }
-    return res.json({ success: true, message: "Inscription approuvée" });
+    return res.json({ success: true, message: tr(req, "Inscription approuvée", "Enrollment approved") });
   } catch (err) {
     console.error("approveEnrollmentById:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -453,7 +503,8 @@ export const rejectEnrollmentById = async (req: any, res: any) => {
        WHERE id = ?`,
       [id]
     );
-    // ✅ Email de rejet
+    await voidCommissionsForEnrollment(Number(id));
+    // Email de rejet
     try {
       const [row]: any = await query(
         `SELECT u.first_name, u.email, c.title
@@ -464,14 +515,14 @@ export const rejectEnrollmentById = async (req: any, res: any) => {
       );
       if (row) {
         const { sendPaymentRejectedEmail } = await import('../services/mail.service');
-        await sendPaymentRejectedEmail(row.email, row.first_name, row.title)
+        await sendPaymentRejectedEmail(row.email, row.first_name, row.title, req.body?.reason, await getUserLang(row.email))
           .catch(e => console.warn("Email reject:", e.message));
       }
     } catch(e) { console.warn("Email reject:", e); }
-    return res.json({ success: true, message: "Inscription rejetée" });
+    return res.json({ success: true, message: tr(req, "Inscription rejetée", "Enrollment rejected") });
   } catch (err) {
     console.error("rejectEnrollmentById:", err);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 

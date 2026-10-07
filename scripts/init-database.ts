@@ -19,15 +19,15 @@ const pool = mariadb.createPool(config);
 async function initializeDatabase() {
   let connection: mariadb.PoolConnection | undefined;
   try {
-    console.log('🔄 Connecting to MariaDB server...');
+    console.log('Connecting to MariaDB server...');
     connection = await pool.getConnection();
     
     // Créer la base de données si elle n'existe pas
-    console.log('🔄 Creating database...');
+    console.log('Creating database...');
     await connection.query(`CREATE DATABASE IF NOT EXISTS ${process.env.DB_NAME || 'devopsakademy'} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE ${process.env.DB_NAME || 'devopsakademy'}`);
 
-    console.log('🔄 Creating tables...');
+    console.log('Creating tables...');
     
     // Table des utilisateurs
     await connection.query(`
@@ -75,7 +75,7 @@ async function initializeDatabase() {
     `);
 
     // Insérer les utilisateurs initiaux
-    console.log('🔄 Inserting initial data...');
+    console.log('Inserting initial data...');
     
     // Mot de passe hashé pour 'password123' (utilisez bcrypt plus tard)
     const adminPasswordHash = '$2a$12$K8G5GkS6W6p6p6p6p6p6pO6p6p6p6p6p6p6p6p6p6p6p6p6p6p6';
@@ -93,12 +93,12 @@ async function initializeDatabase() {
       (2, 'Instructeur certifié DevOps avec 10 ans d''expérience', 'DevOps Engineer', 'TechCorp', '["AWS", "Terraform", "Kubernetes", "CI/CD"]')
     `);
 
-    console.log('✅ Database initialized successfully!');
-    console.log('📊 Default admin user: admin@devopsakademy.com / password123');
-    console.log('📊 Default instructor: instructor@devopsakademy.com / password123');
+    console.log('Database initialized successfully!');
+    console.log('Default admin user: admin@devopsakademy.com / password123');
+    console.log('Default instructor: instructor@devopsakademy.com / password123');
 
   } catch (error) {
-    console.error('❌ Error initializing database:', error);
+    console.error('Error initializing database:', error);
   } finally {
     if (connection) await connection.release();
     await pool.end();

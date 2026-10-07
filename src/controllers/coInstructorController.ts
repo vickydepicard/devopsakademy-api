@@ -6,7 +6,10 @@
 import { Response } from "express";
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
-import { sendEmail } from "../services/mail.service";
+import { sendCoInstructorInviteEmail } from "../services/mail.service";
+import { getUserLang } from "../utils/lang";
+import { createNotification } from "../services/notification.service";
+import { tr } from "../utils/lang";
 
 const FE = () => process.env.FRONTEND_URL || "http://localhost:3000";
 
@@ -42,7 +45,7 @@ export const getCourseCoInstructors = async (req: AuthenticatedRequest, res: Res
     return res.json({ success: true, data: list });
   } catch (error) {
     console.error("getCourseCoInstructors:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -58,75 +61,65 @@ export const addCoInstructor = async (req: AuthenticatedRequest, res: Response) 
     const courseId  = parseInt(req.params.courseId || req.params.id);
     const { instructor_id, commission_rate = 0 } = req.body;
 
-    if (!instructor_id) return res.status(400).json({ success: false, message: "instructor_id requis" });
+    if (!instructor_id) return res.status(400).json({ success: false, message: tr(req, "instructor_id requis", "instructor_id required") });
+    const rate = Number(commission_rate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      return res.status(400).json({ success: false, message: tr(req, "La commission doit être comprise entre 0 et 100 %", "The commission must be between 0 and 100%") });
+    }
 
     if (!(await isOwnerOrAdmin(userId, role, courseId))) {
-      return res.status(403).json({ success: false, message: "Seul le propriétaire ou un admin peut inviter un co-instructeur" });
+      return res.status(403).json({ success: false, message: tr(req, "Seul le propriétaire ou un admin peut inviter un co-instructeur", "Only the owner or an admin can invite a co-instructor") });
     }
 
     // Vérifier que c'est bien un instructeur actif
     const [target]: any = await query(
-      "SELECT id, first_name, last_name, email, role FROM users WHERE id = ? AND role = 'instructor' AND is_active = 1",
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.role FROM users u
+        WHERE u.id = ? AND u.role = 'instructor' AND u.is_active = 1
+          AND EXISTS (SELECT 1 FROM instructor_applications ia WHERE ia.user_id = u.id AND ia.status = 'accepted')`,
       [instructor_id]
     );
-    if (!target) return res.status(404).json({ success: false, message: "Instructeur introuvable ou inactif" });
+    if (!target) return res.status(404).json({ success: false, message: tr(req, "Instructeur introuvable ou inactif", "Instructor not found or inactive") });
 
     // Vérifier pas déjà co-instructeur
     const [existing]: any = await query(
       "SELECT id FROM course_instructors WHERE course_id = ? AND instructor_id = ?",
       [courseId, instructor_id]
     );
-    if (existing) return res.status(409).json({ success: false, message: "Cet instructeur est déjà sur ce cours" });
+    if (existing) return res.status(409).json({ success: false, message: tr(req, "Cet instructeur est déjà sur ce cours", "This instructor is already on this course") });
 
     // Récupérer le cours
     const [course]: any = await query(
       "SELECT title, instructor_id FROM courses WHERE id = ?", [courseId]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     // Vérifier que ce n'est pas le propriétaire du cours
     if (course.instructor_id === parseInt(instructor_id)) {
-      return res.status(400).json({ success: false, message: "Le propriétaire du cours ne peut pas être co-instructeur" });
+      return res.status(400).json({ success: false, message: tr(req, "Le propriétaire du cours ne peut pas être co-instructeur", "The course owner cannot be a co-instructor") });
     }
 
     await query(
       `INSERT INTO course_instructors (course_id, instructor_id, added_by, commission_rate, status)
        VALUES (?, ?, ?, ?, 'pending')`,
-      [courseId, instructor_id, userId, parseFloat(commission_rate) || 0]
+      [courseId, instructor_id, userId, rate]
     );
 
-    // Notifier le co-instructeur par email
-    await sendEmail({
-      to: target.email,
-      subject: `🎓 Invitation co-instructeur — ${course.title}`,
-      html: `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f4f3fb;padding:20px;">
-<div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(45,40,127,0.1);">
-  <div style="background:linear-gradient(135deg,#2d287f,#5653e1);padding:24px;text-align:center;">
-    <p style="margin:0;color:#facc15;font-size:20px;font-weight:900;">DevOps Akademy</p>
-  </div>
-  <div style="padding:28px;">
-    <h2 style="color:#2d287f;margin:0 0 12px;">Bonjour ${target.first_name} 👋</h2>
-    <p style="color:#555;font-size:14px;line-height:1.7;">
-      Vous avez été invité(e) à devenir <strong>co-instructeur</strong> sur le cours :
-    </p>
-    <div style="background:#f8f7ff;border:1px solid #e0e7ff;border-radius:10px;padding:14px;margin:14px 0;">
-      <p style="margin:0;font-size:15px;font-weight:700;color:#2d287f;">${course.title}</p>
-      <p style="margin:4px 0 0;font-size:13px;color:#6366f1;">Commission : ${commission_rate}% sur chaque vente</p>
-    </div>
-    <p style="color:#555;font-size:13px;">Connectez-vous pour accepter ou refuser cette invitation.</p>
-    <div style="text-align:center;margin:20px 0;">
-      <a href="${FE()}/instructor" style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;text-decoration:none;padding:12px 28px;border-radius:10px;font-weight:700;font-size:13px;display:inline-block;">
-        Voir l'invitation →
-      </a>
-    </div>
-  </div>
-</div></body></html>`,
-    }).catch((e: any) => console.warn("Email co-instructor:", e.message));
+    // Notification in-app (non bloquante)
+    void createNotification(Number(target.id), {
+      type: "info",
+      title: `Invitation co-instructeur — ${course.title}`,
+      message: `Vous êtes invité(e) à rejoindre « ${course.title} » (commission ${rate}%).`,
+      link: "/instructor",
+    }).catch(() => {});
 
-    return res.status(201).json({ success: true, message: `${target.first_name} a été invité(e) comme co-instructeur.` });
+    // Notifier le co-instructeur par email
+    await sendCoInstructorInviteEmail(target.email, target.first_name, course.title, rate, await getUserLang(target.email))
+      .catch((e: any) => console.warn("Email co-instructor:", e.message));
+
+    return res.status(201).json({ success: true, message: tr(req, `${target.first_name} a été invité(e) comme co-instructeur.`, `${target.first_name} has been invited as a co-instructor.`) });
   } catch (error) {
     console.error("addCoInstructor:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -144,18 +137,22 @@ export const updateCoInstructorCommission = async (req: AuthenticatedRequest, re
     const { commission_rate } = req.body;
 
     if (!(await isOwnerOrAdmin(userId, role, courseId))) {
-      return res.status(403).json({ success: false, message: "Non autorisé" });
+      return res.status(403).json({ success: false, message: tr(req, "Non autorisé", "Not authorized") });
     }
 
+    const newRate = Number(commission_rate);
+    if (!Number.isFinite(newRate) || newRate < 0 || newRate > 100) {
+      return res.status(400).json({ success: false, message: tr(req, "La commission doit être comprise entre 0 et 100 %", "The commission must be between 0 and 100%") });
+    }
     await query(
       "UPDATE course_instructors SET commission_rate = ? WHERE id = ? AND course_id = ?",
-      [parseFloat(commission_rate) || 0, coInstructorId, courseId]
+      [newRate, coInstructorId, courseId]
     );
 
-    return res.json({ success: true, message: "Commission mise à jour." });
+    return res.json({ success: true, message: tr(req, "Commission mise à jour.", "Commission updated.") });
   } catch (error) {
     console.error("updateCoInstructorCommission:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -174,20 +171,20 @@ export const removeCoInstructor = async (req: AuthenticatedRequest, res: Respons
       "SELECT * FROM course_instructors WHERE id = ? AND course_id = ?",
       [coInstructorId, courseId]
     );
-    if (!entry) return res.status(404).json({ success: false, message: "Entrée introuvable" });
+    if (!entry) return res.status(404).json({ success: false, message: tr(req, "Entrée introuvable", "Entry not found") });
 
     // Peut supprimer : admin, propriétaire du cours, ou l'instructeur lui-même
     const isSelf  = entry.instructor_id === userId;
     const isOwner = await isOwnerOrAdmin(userId, role, courseId);
     if (!isSelf && !isOwner) {
-      return res.status(403).json({ success: false, message: "Non autorisé" });
+      return res.status(403).json({ success: false, message: tr(req, "Non autorisé", "Not authorized") });
     }
 
     await query("DELETE FROM course_instructors WHERE id = ?", [coInstructorId]);
-    return res.json({ success: true, message: "Co-instructeur retiré." });
+    return res.json({ success: true, message: tr(req, "Co-instructeur retiré.", "Co-instructor removed.") });
   } catch (error) {
     console.error("removeCoInstructor:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -203,15 +200,15 @@ export const respondToInvitation = async (req: AuthenticatedRequest, res: Respon
     const { action }     = req.body;
 
     if (!["accept", "reject"].includes(action)) {
-      return res.status(400).json({ success: false, message: "action doit être 'accept' ou 'reject'" });
+      return res.status(400).json({ success: false, message: tr(req, "action doit être 'accept' ou 'reject'", "action must be 'accept' or 'reject'") });
     }
 
     const [entry]: any = await query(
       "SELECT ci.*, c.title FROM course_instructors ci JOIN courses c ON c.id = ci.course_id WHERE ci.id = ? AND ci.instructor_id = ?",
       [coInstructorId, userId]
     );
-    if (!entry) return res.status(404).json({ success: false, message: "Invitation introuvable" });
-    if (entry.status !== "pending") return res.status(409).json({ success: false, message: "Invitation déjà traitée" });
+    if (!entry) return res.status(404).json({ success: false, message: tr(req, "Invitation introuvable", "Invitation not found") });
+    if (entry.status !== "pending") return res.status(409).json({ success: false, message: tr(req, "Invitation déjà traitée", "Invitation already processed") });
 
     const newStatus = action === "accept" ? "accepted" : "rejected";
     await query(
@@ -222,12 +219,12 @@ export const respondToInvitation = async (req: AuthenticatedRequest, res: Respon
     return res.json({
       success: true,
       message: action === "accept"
-        ? `Vous avez accepté d'être co-instructeur sur "${entry.title}".`
-        : `Vous avez décliné l'invitation sur "${entry.title}".`,
+        ? tr(req, `Vous avez accepté d'être co-instructeur sur "${entry.title}".`, `You accepted to be a co-instructor on "${entry.title}".`)
+        : tr(req, `Vous avez décliné l'invitation sur "${entry.title}".`, `You declined the invitation to "${entry.title}".`),
     });
   } catch (error) {
     console.error("respondToInvitation:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -252,6 +249,6 @@ export const getMyInvitations = async (req: AuthenticatedRequest, res: Response)
     return res.json({ success: true, data: invitations });
   } catch (error) {
     console.error("getMyInvitations:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };

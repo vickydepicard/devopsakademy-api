@@ -8,6 +8,7 @@ import {
 } from '../controllers/userController';
 import { authenticate, authorizeRoles } from '../middleware/auth';
 import { query } from '../config/database';
+import { tr } from "../utils/lang";
 
 const router = express.Router();
 
@@ -15,30 +16,35 @@ const router = express.Router();
 // Liste des instructeurs (publique, sans login)
 // ----------------------------
 // ── GET /api/users/instructors — Liste publique des instructeurs ──
-router.get('/instructors', async (req, res) => {
-  try {
-    const instructors = await query(`
-      SELECT
+// Visibilité publique : instructeurs validés (candidature acceptée) + admins qui publient des cours.
+// Avant : tout compte role='instructor' apparaissait, y compris les candidats non validés, et l'email était exposé.
+const PUBLIC_INSTRUCTOR_SQL = `u.is_active = 1 AND (
+  (u.role = 'instructor' AND EXISTS (SELECT 1 FROM instructor_applications ia WHERE ia.user_id = u.id AND ia.status = 'accepted'))
+  OR (u.role IN ('admin','superadmin') AND EXISTS (SELECT 1 FROM courses pc WHERE pc.instructor_id = u.id AND pc.is_published = 1))
+)`;
+
+const PUBLIC_INSTRUCTOR_COLUMNS = `
         u.id,
         CONCAT(u.first_name, ' ', u.last_name) AS name,
-        u.first_name, u.last_name, u.email,
+        u.first_name, u.last_name,
         up.avatar_url, up.bio, up.job_title, up.company,
         up.years_experience, up.skills,
         up.github_url, up.linkedin_url, up.twitter_url, up.website_url,
         up.country, up.city,
-        COUNT(DISTINCT c.id)  AS course_count,
-        COUNT(DISTINCT ce.id) AS student_count,
-        ROUND(AVG(c.rating), 1) AS avg_rating,
-        u.created_at
+        (SELECT COUNT(*) FROM courses c WHERE c.instructor_id = u.id AND c.is_published = 1) AS course_count,
+        (SELECT COUNT(*) FROM course_enrollments ce JOIN courses c ON c.id = ce.course_id
+          WHERE c.instructor_id = u.id AND c.is_published = 1 AND ce.is_approved = 1) AS student_count,
+        (SELECT ROUND(AVG(NULLIF(c.rating, 0)), 1) FROM courses c WHERE c.instructor_id = u.id AND c.is_published = 1) AS avg_rating,
+        u.created_at`;
+
+router.get('/instructors', async (req, res) => {
+  try {
+    const instructors = await query(`
+      SELECT ${PUBLIC_INSTRUCTOR_COLUMNS}
       FROM users u
-      LEFT JOIN user_profiles up  ON up.user_id = u.id
-      LEFT JOIN courses c         ON c.instructor_id = u.id AND c.is_published = 1
-      LEFT JOIN course_enrollments ce ON ce.course_id = c.id AND ce.is_approved = 1
-      WHERE u.role IN ('instructor','admin') AND u.is_active = 1
-      GROUP BY u.id, up.avatar_url, up.bio, up.job_title, up.company,
-               up.years_experience, up.skills, up.github_url, up.linkedin_url,
-               up.twitter_url, up.website_url, up.country, up.city
-      ORDER BY student_count DESC, course_count DESC
+      LEFT JOIN user_profiles up ON up.user_id = u.id
+      WHERE ${PUBLIC_INSTRUCTOR_SQL}
+      ORDER BY student_count DESC, course_count DESC, u.first_name ASC
     `);
 
     // Convertir BigInt + parser skills JSON
@@ -63,29 +69,13 @@ router.get('/instructors/:id', async (req, res) => {
     const { id } = req.params;
 
     const [instructor] = await query(`
-      SELECT
-        u.id,
-        CONCAT(u.first_name, ' ', u.last_name) AS name,
-        u.first_name, u.last_name, u.email,
-        up.avatar_url, up.bio, up.job_title, up.company,
-        up.years_experience, up.skills,
-        up.github_url, up.linkedin_url, up.twitter_url, up.website_url,
-        up.country, up.city,
-        COUNT(DISTINCT c.id)  AS course_count,
-        COUNT(DISTINCT ce.id) AS student_count,
-        ROUND(AVG(c.rating), 1) AS avg_rating,
-        u.created_at
+      SELECT ${PUBLIC_INSTRUCTOR_COLUMNS}
       FROM users u
-      LEFT JOIN user_profiles up  ON up.user_id = u.id
-      LEFT JOIN courses c         ON c.instructor_id = u.id AND c.is_published = 1
-      LEFT JOIN course_enrollments ce ON ce.course_id = c.id AND ce.is_approved = 1
-      WHERE u.id = ? AND u.is_active = 1
-      GROUP BY u.id, up.avatar_url, up.bio, up.job_title, up.company,
-               up.years_experience, up.skills, up.github_url, up.linkedin_url,
-               up.twitter_url, up.website_url, up.country, up.city
+      LEFT JOIN user_profiles up ON up.user_id = u.id
+      WHERE u.id = ? AND ${PUBLIC_INSTRUCTOR_SQL}
     `, [id]);
 
-    if (!instructor) return res.status(404).json({ success: false, message: 'Instructeur introuvable' });
+    if (!instructor) return res.status(404).json({ success: false, message: tr(req, "Instructeur introuvable", "Instructor not found") });
 
     // Cours publiés de cet instructeur
     const courses = await query(`

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
+import { tr } from "../utils/lang";
 
 export const getUserProgress = async (req: Request, res: Response) => {
   try {
@@ -31,7 +32,7 @@ export const getUserProgress = async (req: Request, res: Response) => {
     console.error('Get user progress error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération de la progression'
+      message: tr(req, "Erreur lors de la récupération de la progression", "Error while retrieving progress")
     });
   }
 };
@@ -64,7 +65,7 @@ export const getCourseProgress = async (req: Request, res: Response) => {
     console.error('Get course progress error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération de la progression du cours'
+      message: tr(req, "Erreur lors de la récupération de la progression du cours", "Error while retrieving course progress")
     });
   }
 };
@@ -84,7 +85,7 @@ export const markLessonCompleted = async (req: Request, res: Response) => {
     if (!lesson) {
       return res.status(404).json({
         success: false,
-        message: 'Leçon non trouvée'
+        message: tr(req, "Leçon non trouvée", "Lesson not found")
       });
     }
 
@@ -119,7 +120,7 @@ export const markLessonCompleted = async (req: Request, res: Response) => {
     console.error('Mark lesson completed error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la mise à jour de la progression'
+      message: tr(req, "Erreur lors de la mise à jour de la progression", "Error while updating progress")
     });
   }
 };
@@ -144,7 +145,7 @@ export const getLessonStatus = async (req: Request, res: Response) => {
     console.error('Get lesson status error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération du statut de la leçon'
+      message: tr(req, "Erreur lors de la récupération du statut de la leçon", "Error while retrieving the lesson status")
     });
   }
 };

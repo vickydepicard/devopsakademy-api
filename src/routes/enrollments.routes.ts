@@ -21,11 +21,11 @@ import {
 } from "../controllers/enrollmentController";
 import { authenticate, authorizeRoles } from "../middleware/auth";
 
-// ✅ Chemin absolu pour les uploads — fonctionne en local ET en production
+// Chemin absolu pour les uploads — fonctionne en local ET en production
 const uploadsDir = path.join(process.cwd(), "uploads", "payments");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-// ✅ diskStorage : conserve l'extension du fichier (jpg, png, pdf...)
+// diskStorage : conserve l'extension du fichier (jpg, png, pdf...)
 // Sans ça, multer sauve sans extension → le navigateur ne peut pas afficher l'image
 const paymentStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
@@ -69,14 +69,14 @@ const router = express.Router();
 router.post("/", authenticate, authorizeRoles(["student"]), enrollInCourse);
 router.delete("/:courseId", authenticate, authorizeRoles(["student"]), unenrollFromCourse);
 router.get("/me", authenticate, getUserEnrollments);
-router.get("/status/:courseId", authenticate, getEnrollmentStatus);  // ✅ EnrollButton
+router.get("/status/:courseId", authenticate, getEnrollmentStatus);  // EnrollButton
 router.get("/:courseId/check",  authenticate, checkEnrollment);
 router.get("/:courseId/students", authenticate, authorizeRoles(["instructor", "admin"]), getCourseStudents);
 router.patch("/:courseId/students/:userId/validate", authenticate, authorizeRoles(["admin"]), validateEnrollment);
 router.delete("/:courseId/students/:userId", authenticate, authorizeRoles(["admin"]), adminDeleteEnrollment);
 
 
-// 🔹 Admin : valider une inscription
+// Admin : valider une inscription
 router.patch(
   "/:userId/:courseId/approve",
   authenticate,
@@ -84,7 +84,7 @@ router.patch(
   adminApproveEnrollment
 );
 
-// 🔹 Instructeur/Admin : voir étudiants inscrits à un cours
+// Instructeur/Admin : voir étudiants inscrits à un cours
 router.get(
   "/:courseId/students",
   authenticate,
@@ -92,7 +92,7 @@ router.get(
   getCourseStudents
 );
 
-// 🔹 Admin : voir toutes les inscriptions
+// Admin : voir toutes les inscriptions
 router.get(
   "/",
   authenticate,
@@ -123,7 +123,7 @@ router.patch(
   adminApproveEnrollment
 );
 
-// 🔹 Étudiant : voir les détails de son cours inscrit
+// Étudiant : voir les détails de son cours inscrit
 router.get(
   "/:courseId/details",
   authenticate,

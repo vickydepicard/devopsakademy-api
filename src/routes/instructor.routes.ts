@@ -9,13 +9,14 @@ import {
   approveInstructorApplication,
   rejectInstructorApplication,
   getInstructorApplicationById,
+  markApplicationUnderReview,
 } from "../controllers/instructorController";
 
 const router = Router();
 
 // ── Étudiant : soumettre / voir sa candidature ──
 router.post("/",
-  authenticateAllowInactive, // ✅ Accepte les comptes non encore activés
+  authenticateAllowInactive, // Accepte les comptes non encore activés
   submitInstructorApplication
 );
 
@@ -41,6 +42,12 @@ router.patch("/:id/approve",
   authenticate,
   authorizeRoles(["admin", "superadmin"]),
   approveInstructorApplication
+);
+
+router.patch("/:id/review",
+  authenticate,
+  authorizeRoles(["admin", "superadmin"]),
+  markApplicationUnderReview
 );
 
 router.patch("/:id/reject",

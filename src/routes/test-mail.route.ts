@@ -8,7 +8,7 @@ router.post('/test-sendgrid', async (req, res) => {
     await sendEmail({
       to: req.body.email,
       subject: 'Test SendGrid Local',
-      html: '<h2>Email envoyé depuis le local 🚀</h2>',
+      html: '<h2>Email envoyé depuis le local</h2>',
     });
 
     res.json({ success: true, message: 'Email envoyé' });

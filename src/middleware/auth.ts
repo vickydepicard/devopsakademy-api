@@ -2,8 +2,9 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { query } from "../config/database";
+import { tr } from "../utils/lang";
 
-// ✅ Étend Request pour avoir req.user
+// Étend Request pour avoir req.user
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: number;
@@ -21,7 +22,6 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   const authHeader = req.headers["authorization"];
-  console.log("🔑 Auth header reçu:", authHeader);
 
   // Vérifie que le header existe et commence par "Bearer "
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -31,14 +31,12 @@ export const authenticate = async (
   }
 
   const token = authHeader.split(" ")[1]; // format: Bearer TOKEN
-  console.log("📦 Token extrait:", token);
 
   try {
-    // ✅ Vérification du JWT
+    // Vérification du JWT
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET as string);
-    console.log("✅ Token décodé:", decoded);
 
-    // 🔍 Vérifier que l’utilisateur existe et est actif
+    // Vérifier que l’utilisateur existe et est actif
     const [userRow]: any = await query(
       "SELECT id, email, first_name, last_name, role, is_active FROM users WHERE id = ?",
       [decoded.id]
@@ -47,15 +45,15 @@ export const authenticate = async (
     if (!userRow) {
       return res
         .status(401)
-        .json({ success: false, message: "Utilisateur introuvable" });
+        .json({ success: false, message: tr(req, "Utilisateur introuvable", "User not found") });
     }
     if (!userRow.is_active) {
       return res
         .status(403)
-        .json({ success: false, message: "Compte désactivé" });
+        .json({ success: false, message: tr(req, "Compte désactivé", "Account disabled") });
     }
 
-    // ✅ Injecter user dans req
+    // Injecter user dans req
     req.user = {
       id: Number(userRow.id),
       role: userRow.role,
@@ -66,11 +64,33 @@ export const authenticate = async (
 
     next();
   } catch (error) {
-    console.error("❌ JWT verification error:", error);
+    if (process.env.NODE_ENV !== "production") console.warn("JWT verification failed:", (error as Error)?.message);
     return res
       .status(403)
       .json({ success: false, message: "Invalid or expired token" });
   }
+};
+
+// Authentification facultative : renseigne req.user si un jeton valide est fourni, sinon laisse passer.
+export const optionalAuthenticate = async (
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    try {
+      const decoded: any = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET as string);
+      const [u]: any = await query(
+        "SELECT id, email, first_name, last_name, role, is_active FROM users WHERE id = ?",
+        [decoded.id]
+      );
+      if (u && u.is_active) {
+        req.user = { id: Number(u.id), role: u.role, email: u.email, first_name: u.first_name, last_name: u.last_name };
+      }
+    } catch { /* jeton invalide : on traite comme visiteur */ }
+  }
+  next();
 };
 
 // ================= AUTHORIZATION =================
@@ -96,9 +116,9 @@ export const authenticateAllowInactive = async (
       [decoded.id]
     );
     if (!userRow) {
-      return res.status(401).json({ success: false, message: "Utilisateur introuvable" });
+      return res.status(401).json({ success: false, message: tr(req, "Utilisateur introuvable", "User not found") });
     }
-    // ✅ On ne bloque PAS les comptes inactifs ici
+    // On ne bloque PAS les comptes inactifs ici
     req.user = {
       id: Number(userRow.id),
       role: userRow.role,
@@ -108,7 +128,7 @@ export const authenticateAllowInactive = async (
     };
     next();
   } catch (error) {
-    return res.status(401).json({ success: false, message: "Token invalide ou expiré" });
+    return res.status(401).json({ success: false, message: tr(req, "Token invalide ou expiré", "Invalid or expired token") });
   }
 };
 

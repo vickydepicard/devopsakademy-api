@@ -11,7 +11,7 @@ import {
 const router = express.Router();
 
 // ========================
-// ✅ ROUTES PUBLIQUES (VISITEURS)
+// ROUTES PUBLIQUES (VISITEURS)
 // ========================
 router.get("/", allowVisitors, courseController.getCourses);
 router.get("/popular", allowVisitors, courseController.getPopularCourses);
@@ -21,24 +21,24 @@ router.get("/filters", allowVisitors, courseController.getCourseFilters);
 router.get("/public/:id", allowVisitors, courseController.getCoursePublic);
 
 // ========================
-// ✅ DÉTAILS DU COURS (2 VERSIONS)
+// DÉTAILS DU COURS (2 VERSIONS)
 // ========================
 router.get("/:id/preview", allowVisitors, courseController.getCoursePreview);
 router.get("/:id", allowVisitors, courseController.getCourseById);
 router.get("/:id/details", requireAuth, courseController.getCourseByIdEnhanced);
 
 // ========================
-// ✅ INSCRIPTION AU COURS (CONNECTÉ)
+// INSCRIPTION AU COURS (CONNECTÉ)
 // ========================
 router.post("/:id/enroll", requireAuth, courseController.enrollCourse);
 
 // ========================
-// ✅ CONTENU DU COURS (INSCRIT)
+// CONTENU DU COURS (INSCRIT)
 // ========================
 router.get("/:id/learn", requireAuth, requireEnrollment, courseController.getCourseContent);
 
 // ========================
-// ✅ AVIS (PUBLIC + CONNECTÉ)
+// AVIS (PUBLIC + CONNECTÉ)
 // ========================
 router.get("/:id/reviews",    allowVisitors, getCourseReviews);
 router.get("/:id/my-review",  requireAuth,   getMyReview);
@@ -47,26 +47,27 @@ router.put("/:id/reviews",    requireAuth,   updateReview);
 router.delete("/:id/reviews", requireAuth,   deleteReview);
 
 // ========================
-// ✅ MODULES + LEÇONS — ROUTE AJOUTÉE
+// MODULES + LEÇONS — ROUTE AJOUTÉE
 // ========================
 router.get("/:id/modules", requireAuth, requireEnrollment, courseController.getCourseModules);
 
 // ========================
-// ✅ PROGRESSION — ROUTE AJOUTÉE
+// PROGRESSION — ROUTE AJOUTÉE
 // ========================
 router.get("/:id/progress", requireAuth, courseController.getCourseProgressForUser);
 
 // ========================
-// ✅ LEÇONS (INSCRIT)
+// LEÇONS (INSCRIT)
 // ========================
 router.get("/:id/lessons/:lessonId", requireAuth, requireEnrollment, courseController.getLesson);
+router.post("/:id/resources/:resourceId/download", requireAuth, requireEnrollment, courseController.downloadResource);
 router.patch("/:id/lessons/:lessonId/status", requireAuth, requireEnrollment, courseController.updateLessonStatus);
 
-// ✅ MARQUER LEÇON TERMINÉE — ROUTE AJOUTÉE
+// MARQUER LEÇON TERMINÉE — ROUTE AJOUTÉE
 router.post("/:id/lessons/:lessonId/complete", requireAuth, requireEnrollment, courseController.completeLesson);
 
 // ========================
-// ✅ GESTION DES COURS (INSTRUCTEUR/ADMIN)
+// GESTION DES COURS (INSTRUCTEUR/ADMIN)
 // ========================
 router.post("/", requireAuth, requireInstructorOrAdmin, courseController.createCourse);
 router.put("/:id", requireAuth, requireInstructorOrAdmin, courseController.updateCourse);

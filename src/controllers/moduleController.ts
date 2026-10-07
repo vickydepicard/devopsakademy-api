@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { tr } from "../utils/lang";
 
-// ✅ Helper pour convertir BigInt en Number
+// Helper pour convertir BigInt en Number
 function convertBigInt(obj: any): any {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj === "bigint") return Number(obj);
+  if (obj instanceof Date) return obj;
   if (Array.isArray(obj)) return obj.map(convertBigInt);
   if (typeof obj === "object") {
     return Object.fromEntries(
@@ -26,7 +28,7 @@ export const getModules = async (req: AuthenticatedRequest, res: Response) => {
     if (isNaN(courseIdNum)) {
       return res.status(400).json({ 
         success: false, 
-        message: "ID de cours invalide" 
+        message: tr(req, "ID de cours invalide", "Invalid course ID") 
       });
     }
 
@@ -39,7 +41,7 @@ export const getModules = async (req: AuthenticatedRequest, res: Response) => {
     if (!course) {
       return res.status(404).json({ 
         success: false, 
-        message: "Cours non trouvé" 
+        message: tr(req, "Cours non trouvé", "Course not found") 
       });
     }
 
@@ -53,7 +55,7 @@ export const getModules = async (req: AuthenticatedRequest, res: Response) => {
     if (!hasAccess) {
       return res.status(403).json({ 
         success: false, 
-        message: "Accès refusé" 
+        message: tr(req, "Accès refusé", "Access denied") 
       });
     }
 
@@ -76,7 +78,7 @@ export const getModules = async (req: AuthenticatedRequest, res: Response) => {
     console.error('Get modules error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération des modules'
+      message: tr(req, "Erreur lors de la récupération des modules", "Error while retrieving modules")
     });
   }
 };
@@ -93,7 +95,7 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     if (isNaN(courseIdNum) || isNaN(moduleIdNum)) {
       return res.status(400).json({ 
         success: false, 
-        message: "ID de cours ou module invalide" 
+        message: tr(req, "ID de cours ou module invalide", "Invalid course or module ID") 
       });
     }
 
@@ -106,7 +108,7 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     if (!course) {
       return res.status(404).json({ 
         success: false, 
-        message: "Cours non trouvé" 
+        message: tr(req, "Cours non trouvé", "Course not found") 
       });
     }
 
@@ -120,7 +122,7 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     if (!hasAccess) {
       return res.status(403).json({ 
         success: false, 
-        message: "Accès refusé" 
+        message: tr(req, "Accès refusé", "Access denied") 
       });
     }
 
@@ -134,7 +136,7 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     if (!module) {
       return res.status(404).json({
         success: false,
-        message: 'Module non trouvé'
+        message: tr(req, "Module non trouvé", "Module not found")
       });
     }
 
@@ -156,7 +158,7 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     console.error('Get module error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération du module'
+      message: tr(req, "Erreur lors de la récupération du module", "Error while retrieving the module")
     });
   }
 };
@@ -170,7 +172,7 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!user) {
       return res.status(401).json({ 
         success: false, 
-        message: "Non authentifié" 
+        message: tr(req, "Non authentifié", "Not authenticated") 
       });
     }
 
@@ -180,14 +182,14 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
     if (isNaN(courseIdNum)) {
       return res.status(400).json({ 
         success: false, 
-        message: "ID de cours invalide" 
+        message: tr(req, "ID de cours invalide", "Invalid course ID") 
       });
     }
 
     if (!title) {
       return res.status(400).json({
         success: false,
-        message: 'Le titre est requis'
+        message: tr(req, "Le titre est requis", "The title is required")
       });
     }
 
@@ -200,7 +202,7 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!course) {
       return res.status(404).json({
         success: false,
-        message: 'Cours non trouvé ou accès non autorisé'
+        message: tr(req, "Cours non trouvé ou accès non autorisé", "Course not found or access not authorized")
       });
     }
 
@@ -221,14 +223,14 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
 
     res.status(201).json({
       success: true,
-      message: 'Module créé avec succès',
+      message: tr(req, "Module créé avec succès", "Module created successfully"),
       data: { id: (result as any).insertId }
     });
   } catch (error) {
     console.error('Create module error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la création du module'
+      message: tr(req, "Erreur lors de la création du module", "Error while creating the module")
     });
   }
 };
@@ -242,7 +244,7 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!user) {
       return res.status(401).json({ 
         success: false, 
-        message: "Non authentifié" 
+        message: tr(req, "Non authentifié", "Not authenticated") 
       });
     }
 
@@ -253,7 +255,7 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
     if (isNaN(courseIdNum) || isNaN(moduleIdNum)) {
       return res.status(400).json({ 
         success: false, 
-        message: "ID de cours ou module invalide" 
+        message: tr(req, "ID de cours ou module invalide", "Invalid course or module ID") 
       });
     }
 
@@ -268,7 +270,7 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!module) {
       return res.status(404).json({
         success: false,
-        message: 'Module non trouvé'
+        message: tr(req, "Module non trouvé", "Module not found")
       });
     }
 
@@ -276,7 +278,7 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
     if (user.role !== 'admin' && user.id !== module.instructor_id) {
       return res.status(403).json({
         success: false,
-        message: 'Non autorisé à modifier ce module'
+        message: tr(req, "Non autorisé à modifier ce module", "Not authorized to edit this module")
       });
     }
 
@@ -294,13 +296,13 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
 
     res.json({
       success: true,
-      message: 'Module mis à jour avec succès'
+      message: tr(req, "Module mis à jour avec succès", "Module updated successfully")
     });
   } catch (error) {
     console.error('Update module error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la mise à jour du module'
+      message: tr(req, "Erreur lors de la mise à jour du module", "Error while updating the module")
     });
   }
 };
@@ -313,7 +315,7 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!user) {
       return res.status(401).json({ 
         success: false, 
-        message: "Non authentifié" 
+        message: tr(req, "Non authentifié", "Not authenticated") 
       });
     }
 
@@ -324,7 +326,7 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
     if (isNaN(courseIdNum) || isNaN(moduleIdNum)) {
       return res.status(400).json({ 
         success: false, 
-        message: "ID de cours ou module invalide" 
+        message: tr(req, "ID de cours ou module invalide", "Invalid course or module ID") 
       });
     }
 
@@ -339,7 +341,7 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
     if (!module) {
       return res.status(404).json({
         success: false,
-        message: 'Module non trouvé'
+        message: tr(req, "Module non trouvé", "Module not found")
       });
     }
 
@@ -347,7 +349,7 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
     if (user.role !== 'admin' && user.id !== module.instructor_id) {
       return res.status(403).json({
         success: false,
-        message: 'Non autorisé à supprimer ce module'
+        message: tr(req, "Non autorisé à supprimer ce module", "Not authorized to delete this module")
       });
     }
 
@@ -363,13 +365,13 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
 
     res.json({
       success: true,
-      message: 'Module supprimé avec succès'
+      message: tr(req, "Module supprimé avec succès", "Module deleted successfully")
     });
   } catch (error) {
     console.error('Delete module error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la suppression du module'
+      message: tr(req, "Erreur lors de la suppression du module", "Error while deleting the module")
     });
   }
 };

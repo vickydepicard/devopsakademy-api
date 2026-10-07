@@ -22,7 +22,7 @@ router.post('/test', async (req: Request, res: Response) => {
     await sendEmail({
       to: email,
       subject: 'Test email — DevOpsAkademy',
-      html: '<h2>Email de test 🚀</h2><p>Si vous recevez ceci, Brevo fonctionne correctement.</p>',
+      html: '<h2>Email de test</h2><p>Si vous recevez ceci, Brevo fonctionne correctement.</p>',
     });
 
     return res.status(200).json({

@@ -1,7 +1,9 @@
+import { getCourseAccess } from "../utils/courseAccess";
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "./auth";
+import { tr } from "../utils/lang";
 
 // ================= VISITEUR =================
 export const allowVisitors = (
@@ -23,7 +25,7 @@ export const requireAuth = async (
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
       success: false,
-      message: "Accès non autorisé. Veuillez vous connecter.",
+      message: tr(req, "Accès non autorisé. Veuillez vous connecter.", "Unauthorized access. Please log in."),
       redirectTo: "/api/auth/login",
     });
   }
@@ -39,10 +41,10 @@ export const requireAuth = async (
     );
 
     if (!userRow) {
-      return res.status(401).json({ success: false, message: "Utilisateur introuvable." });
+      return res.status(401).json({ success: false, message: tr(req, "Utilisateur introuvable.", "User not found.") });
     }
     if (!userRow.is_active) {
-      return res.status(403).json({ success: false, message: "Compte désactivé." });
+      return res.status(403).json({ success: false, message: tr(req, "Compte désactivé.", "Account disabled.") });
     }
 
     req.user = {
@@ -57,7 +59,7 @@ export const requireAuth = async (
   } catch (error) {
     return res.status(401).json({
       success: false,
-      message: "Token invalide ou expiré.",
+      message: tr(req, "Token invalide ou expiré.", "Invalid or expired token."),
       redirectTo: "/api/auth/login",
     });
   }
@@ -72,14 +74,14 @@ export const requireEnrollment = async (
   next: NextFunction
 ) => {
   try {
-    // ✅ Compatibilité :id ET :courseId selon la route
+    // Compatibilité :id ET :courseId selon la route
     const courseId = req.params.id ?? req.params.courseId;
     const userId   = req.user?.id;
 
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Veuillez vous connecter.",
+        message: tr(req, "Veuillez vous connecter.", "Please log in."),
         redirectTo: "/api/auth/login",
       });
     }
@@ -87,19 +89,15 @@ export const requireEnrollment = async (
     if (!courseId) {
       return res.status(400).json({
         success: false,
-        message: "ID du cours manquant.",
+        message: tr(req, "ID du cours manquant.", "Missing course ID."),
       });
     }
 
-    // Admins et instructeurs du cours ont toujours accès
-    if (req.user?.role === "admin") return next();
-
-    if (req.user?.role === "instructor") {
-      const [ownedCourse]: any = await query(
-        "SELECT id FROM courses WHERE id = ? AND instructor_id = ?",
-        [courseId, userId]
-      );
-      if (ownedCourse) return next();
+    // Mode enseignant : admin, auteur et intervenants du cours ouvrent le cours sans inscription
+    // (aucune progression n'est enregistrée pour eux).
+    if (req.user?.role === "admin" || req.user?.role === "superadmin" || req.user?.role === "instructor") {
+      const access = await getCourseAccess({ id: userId, role: req.user.role }, Number(courseId));
+      if (access.canView) { (req as any).teacherMode = true; return next(); }
     }
 
     // Vérifier l'inscription (is_approved = 1 obligatoire pour les payants,
@@ -114,7 +112,7 @@ export const requireEnrollment = async (
     if (!enrollment) {
       return res.status(403).json({
         success: false,
-        message: "Vous devez être inscrit à ce cours pour y accéder.",
+        message: tr(req, "Vous devez être inscrit à ce cours pour y accéder.", "You must be enrolled in this course to access it."),
         redirectTo: `/courses/${courseId}`,
       });
     }
@@ -127,7 +125,7 @@ export const requireEnrollment = async (
     if (!isAccessGranted) {
       return res.status(403).json({
         success: false,
-        message: "Votre inscription est en attente de validation.",
+        message: tr(req, "Votre inscription est en attente de validation.", "Your enrollment is awaiting approval."),
         redirectTo: `/courses/${courseId}`,
         enrollment_status: enrollment.payment_status,
       });
@@ -138,7 +136,7 @@ export const requireEnrollment = async (
     console.error("requireEnrollment error:", error);
     return res.status(500).json({
       success: false,
-      message: "Erreur lors de la vérification de l'inscription.",
+      message: tr(req, "Erreur lors de la vérification de l'inscription.", "Error while checking the enrollment."),
     });
   }
 };
@@ -150,10 +148,10 @@ export const requireAdmin = (
   next: NextFunction
 ) => {
   if (!req.user) {
-    return res.status(401).json({ success: false, message: "Veuillez vous connecter." });
+    return res.status(401).json({ success: false, message: tr(req, "Veuillez vous connecter.", "Please log in.") });
   }
   if (req.user.role !== "admin") {
-    return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs." });
+    return res.status(403).json({ success: false, message: tr(req, "Accès réservé aux administrateurs.", "Access reserved for administrators.") });
   }
   next();
 };
@@ -165,7 +163,7 @@ export const requireInstructorOrAdmin = async (
   next: NextFunction
 ) => {
   if (!req.user) {
-    return res.status(401).json({ success: false, message: "Veuillez vous connecter." });
+    return res.status(401).json({ success: false, message: tr(req, "Veuillez vous connecter.", "Please log in.") });
   }
 
   // Admin → accès total
@@ -183,17 +181,19 @@ export const requireInstructorOrAdmin = async (
       if (app) return next();
       return res.status(403).json({
         success: false,
-        message: "Votre candidature instructeur n'a pas encore été validée.",
+        message: tr(req, "Votre candidature instructeur n'a pas encore été validée.", "Your instructor application has not been approved yet."),
         code: "APPLICATION_NOT_APPROVED",
       });
-    } catch {
-      return next(); // fail-open en cas d'erreur DB
+    } catch (error) {
+      // Fail-closed : en cas d'erreur base de données on refuse, on ne laisse jamais passer.
+      console.error("requireInstructorOrAdmin:", (error as Error)?.message);
+      return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
     }
   }
 
   return res.status(403).json({
     success: false,
-    message: "Accès réservé aux instructeurs ou administrateurs.",
+    message: tr(req, "Accès réservé aux instructeurs ou administrateurs.", "Access reserved for instructors or administrators."),
   });
 };
 

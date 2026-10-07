@@ -2,7 +2,10 @@
 import { Request, Response } from "express";
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
-import { sendEmail, sendWelcomeEmail } from "../services/mail.service";
+import { sendInstructorApplicationReceivedEmail, sendInstructorApplicationAcceptedEmail, sendInstructorApplicationRejectedEmail } from "../services/mail.service";
+import { getUserLang, langFromReq } from "../utils/lang";
+import { notifyAdmins } from "../services/notification.service";
+import { tr } from "../utils/lang";
 
 // ══════════════════════════════════════════════════════
 // POST /api/instructor-applications
@@ -11,7 +14,7 @@ import { sendEmail, sendWelcomeEmail } from "../services/mail.service";
 export const submitInstructorApplication = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const {
       motivation, experience, expertise_areas, years_experience,
@@ -19,24 +22,40 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
       proposed_course_title, proposed_course_description,
     } = req.body;
 
-    // Validation précise
+    // Validation (messages dans la langue de l'utilisateur)
     const errors: Record<string, string> = {};
-    if (!motivation || motivation.trim().length < 50)
-      errors.motivation = "La motivation doit contenir au moins 50 caractères";
-    if (!experience || experience.trim().length < 30)
-      errors.experience = "L'expérience doit contenir au moins 30 caractères";
-    if (!proposed_course_title || proposed_course_title.trim().length < 5)
-      errors.proposed_course_title = "Le titre du cours proposé est requis (min 5 caractères)";
-    if (!years_experience || isNaN(Number(years_experience)) || Number(years_experience) < 0)
-      errors.years_experience = "Les années d'expérience doivent être un nombre valide";
-
-    if (linkedin_url && !linkedin_url.includes("linkedin.com"))
-      errors.linkedin_url = "URL LinkedIn invalide (doit contenir linkedin.com)";
+    const motivationText = String(motivation ?? "").trim();
+    const experienceText = String(experience ?? "").trim();
+    const courseTitle = String(proposed_course_title ?? "").trim();
+    const yearsNum = Number(years_experience);
+    if (motivationText.length < 50)
+      errors.motivation = tr(req, "La motivation doit contenir au moins 50 caractères", "Your motivation must contain at least 50 characters");
+    if (experienceText.length < 30)
+      errors.experience = tr(req, "L'expérience doit contenir au moins 30 caractères", "Your experience must contain at least 30 characters");
+    if (courseTitle.length < 5)
+      errors.proposed_course_title = tr(req, "Le titre du cours proposé est requis (min 5 caractères)", "The proposed course title is required (min 5 characters)");
+    if (years_experience === undefined || years_experience === "" || !Number.isInteger(yearsNum) || yearsNum < 0 || yearsNum > 60)
+      errors.years_experience = tr(req, "Les années d'expérience doivent être un nombre entier valide", "Years of experience must be a valid whole number");
+    const urlOk = (v: any, host?: string) => {
+      try {
+        const u = new URL(String(v));
+        return ["http:", "https:"].includes(u.protocol) && (!host || u.hostname.toLowerCase().endsWith(host));
+      } catch { return false; }
+    };
+    if (linkedin_url && !urlOk(linkedin_url, "linkedin.com"))
+      errors.linkedin_url = tr(req, "URL LinkedIn invalide (doit contenir linkedin.com)", "Invalid LinkedIn URL (must contain linkedin.com)");
+    if (portfolio_url && !urlOk(portfolio_url))
+      errors.portfolio_url = tr(req, "URL du portfolio invalide", "Invalid portfolio URL");
+    if (cv_url && !urlOk(cv_url))
+      errors.cv_url = tr(req, "URL du CV invalide", "Invalid CV URL");
+    const areas: string[] = Array.isArray(expertise_areas)
+      ? expertise_areas.map((a: any) => String(a).trim()).filter(Boolean).slice(0, 20)
+      : [];
 
     if (Object.keys(errors).length > 0) {
       return res.status(400).json({
         success: false,
-        message: "Certains champs sont invalides",
+        message: tr(req, "Certains champs sont invalides", "Some fields are invalid"),
         errors,
       });
     }
@@ -51,32 +70,36 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
       if (existing.status === "pending" || existing.status === "under_review") {
         return res.status(409).json({
           success: false,
-          message: "Vous avez déjà une candidature en cours d'examen. Attendez la décision avant de soumettre à nouveau.",
+          message: tr(req, "Vous avez déjà une candidature en cours d'examen. Attendez la décision avant de soumettre à nouveau.", "You already have an application under review. Please wait for the decision before submitting again."),
           existing_status: existing.status,
         });
       }
       if (existing.status === "accepted") {
         return res.status(409).json({
           success: false,
-          message: "Votre candidature a déjà été acceptée. Vous êtes déjà instructeur !",
+          message: tr(req, "Votre candidature a déjà été acceptée. Vous êtes déjà instructeur !", "Your application has already been accepted. You are already an instructor!"),
         });
       }
       // Si rejeté → permettre une nouvelle candidature
     }
 
-    // Insérer la candidature
+    // Insérer la candidature (toutes les colonnes renseignées par le formulaire)
     const result: any = await query(
       `INSERT INTO instructor_applications
-         (user_id, motivation, experience, linkedin_url, cv_url,
-          sample_course_topic, status, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())`,
+         (user_id, motivation, experience, years_experience, expertise_areas, linkedin_url, portfolio_url, cv_url,
+          sample_course_topic, proposed_course_description, status, submitted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
       [
         userId,
-        motivation.trim(),
-        experience.trim(),
-        linkedin_url?.trim() || null,
-        cv_url?.trim() || null,
-        proposed_course_title?.trim() || null,
+        motivationText,
+        experienceText,
+        yearsNum,
+        areas.length ? JSON.stringify(areas) : null,
+        String(linkedin_url || "").trim() || null,
+        String(portfolio_url || "").trim() || null,
+        String(cv_url || "").trim() || null,
+        courseTitle,
+        String(proposed_course_description || "").trim().slice(0, 5000) || null,
       ]
     );
 
@@ -85,34 +108,28 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
       "SELECT first_name, email FROM users WHERE id = ?", [userId]
     );
     if (user) {
-      await sendEmail({
-        to: user.email,
-        subject: "Candidature instructeur reçue — DevOpsAkademy",
-        html: `<p>Bonjour <strong>${user.first_name}</strong>,</p>
-               <p>Nous avons bien reçu votre candidature pour devenir instructeur sur <strong>DevOpsAkademy</strong>.</p>
-               <p>Notre équipe l'examinera sous <strong>3 à 5 jours ouvrés</strong>. Vous recevrez une réponse par email.</p>
-               <p>Merci pour votre intérêt !</p>
-               <p>— L'équipe DevOpsAkademy</p>`,
-      }).catch(e => console.warn("Email candidature:", e.message));
+      await sendInstructorApplicationReceivedEmail(user.email, user.first_name, await getUserLang(userId, langFromReq(req)))
+        .catch(e => console.warn("Email candidature:", e.message));
 
-      // Email de notification aux admins
-      await sendEmail({
-        to: process.env.ADMIN_EMAIL || process.env.MAIL_FROM_EMAIL || "",
-        subject: `Nouvelle candidature instructeur — ${user.first_name}`,
-        html: `<p>Nouvelle candidature instructeur soumise par <strong>${user.first_name}</strong> (${user.email}).</p>
-               <p>Cours proposé : <em>${proposed_course_title || "Non spécifié"}</em></p>
-               <p><a href="${process.env.FRONTEND_URL}/admin/instructor-applications">Voir la candidature →</a></p>`,
-      }).catch(e => console.warn("Email admin candidature:", e.message));
+      // Notification aux admins (in-app + temps réel + email)
+      void notifyAdmins({
+        type: "instructor_application",
+        title: `Nouvelle candidature instructeur — ${user.first_name}`,
+        message: `${user.first_name} (${user.email}) souhaite devenir instructeur.
+Cours proposé : ${courseTitle || "Non spécifié"}`,
+        link: "/admin/instructor-applications",
+        data: { application_id: Number(result.insertId), user_id: userId },
+      });
     }
 
     return res.status(201).json({
       success: true,
-      message: "Candidature soumise avec succès ! Nous vous répondrons sous 3 à 5 jours ouvrés.",
+      message: tr(req, "Candidature soumise avec succès ! Nous vous répondrons sous 3 à 5 jours ouvrés.", "Application submitted successfully! We will reply within 3 to 5 business days."),
       data: { id: Number(result.insertId) },
     });
   } catch (error) {
     console.error("submitInstructorApplication:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur lors de la soumission" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur lors de la soumission", "Server error during submission") });
   }
 };
 
@@ -123,7 +140,7 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
 export const getMyInstructorApplication = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const [app]: any = await query(
       `SELECT id, status, motivation, experience, linkedin_url, cv_url,
@@ -137,7 +154,7 @@ export const getMyInstructorApplication = async (req: AuthenticatedRequest, res:
     return res.json({ success: true, data: app || null });
   } catch (error) {
     console.error("getMyInstructorApplication:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -180,7 +197,7 @@ export const getAllInstructorApplications = async (req: AuthenticatedRequest, re
       params
     );
 
-    // ✅ Stats par statut pour les compteurs du dashboard
+    // Stats par statut pour les compteurs du dashboard
     const statRows: any[] = await query(
       `SELECT status, COUNT(*) AS cnt FROM instructor_applications GROUP BY status`
     );
@@ -195,7 +212,7 @@ export const getAllInstructorApplications = async (req: AuthenticatedRequest, re
     });
   } catch (error) {
     console.error("getAllInstructorApplications:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -212,11 +229,11 @@ export const getInstructorApplicationById = async (req: AuthenticatedRequest, re
        WHERE ia.id = ?`,
       [id]
     );
-    if (!app) return res.status(404).json({ success: false, message: "Candidature introuvable" });
+    if (!app) return res.status(404).json({ success: false, message: tr(req, "Candidature introuvable", "Application not found") });
     return res.json({ success: true, data: app });
   } catch (error) {
     console.error("getInstructorApplicationById:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -234,9 +251,9 @@ export const approveInstructorApplication = async (req: AuthenticatedRequest, re
       "SELECT ia.*, u.email, u.first_name FROM instructor_applications ia JOIN users u ON u.id = ia.user_id WHERE ia.id = ?",
       [id]
     );
-    if (!app) return res.status(404).json({ success: false, message: "Candidature introuvable" });
+    if (!app) return res.status(404).json({ success: false, message: tr(req, "Candidature introuvable", "Application not found") });
     if (app.status === "accepted")
-      return res.status(409).json({ success: false, message: "Cette candidature est déjà approuvée" });
+      return res.status(409).json({ success: false, message: tr(req, "Cette candidature est déjà approuvée", "This application has already been approved") });
 
     // Mettre à jour la candidature
     await query(
@@ -253,28 +270,16 @@ export const approveInstructorApplication = async (req: AuthenticatedRequest, re
     );
 
     // Email de validation
-    await sendEmail({
-      to: app.email,
-      subject: "🎉 Candidature acceptée — Vous êtes maintenant instructeur !",
-      html: `<p>Bonjour <strong>${app.first_name}</strong>,</p>
-             <p>Félicitations ! Votre candidature pour devenir instructeur sur <strong>DevOpsAkademy</strong> a été <strong>acceptée</strong>.</p>
-             <p>Votre compte a été mis à jour. Reconnectez-vous pour accéder à votre espace instructeur.</p>
-             ${note ? `<p><strong>Message de l'équipe :</strong> ${note}</p>` : ""}
-             <div style="text-align:center;margin:24px 0;">
-               <a href="${process.env.FRONTEND_URL}/login" style="background:linear-gradient(135deg,#2d287f,#5653e1);color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700;">
-                 Accéder à mon espace instructeur →
-               </a>
-             </div>
-             <p>Bienvenue dans l'équipe ! — DevOpsAkademy</p>`,
-    }).catch(e => console.warn("Email approve instructor:", e.message));
+    await sendInstructorApplicationAcceptedEmail(app.email, app.first_name, note, await getUserLang(app.user_id))
+      .catch(e => console.warn("Email approve instructor:", e.message));
 
     return res.json({
       success: true,
-      message: `Candidature de ${app.first_name} approuvée. Le rôle instructeur a été attribué.`,
+      message: tr(req, `Candidature de ${app.first_name} approuvée. Le rôle instructeur a été attribué.`, `${app.first_name}'s application approved. The instructor role has been granted.`),
     });
   } catch (error) {
     console.error("approveInstructorApplication:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -290,7 +295,7 @@ export const rejectInstructorApplication = async (req: AuthenticatedRequest, res
     if (!rejection_reason || rejection_reason.trim().length < 10) {
       return res.status(400).json({
         success: false,
-        message: "Un motif de refus est requis (minimum 10 caractères)",
+        message: tr(req, "Un motif de refus est requis (minimum 10 caractères)", "A reason for rejection is required (minimum 10 characters)"),
       });
     }
 
@@ -298,9 +303,9 @@ export const rejectInstructorApplication = async (req: AuthenticatedRequest, res
       "SELECT ia.*, u.email, u.first_name FROM instructor_applications ia JOIN users u ON u.id = ia.user_id WHERE ia.id = ?",
       [id]
     );
-    if (!app) return res.status(404).json({ success: false, message: "Candidature introuvable" });
+    if (!app) return res.status(404).json({ success: false, message: tr(req, "Candidature introuvable", "Application not found") });
     if (app.status === "rejected")
-      return res.status(409).json({ success: false, message: "Cette candidature est déjà rejetée" });
+      return res.status(409).json({ success: false, message: tr(req, "Cette candidature est déjà rejetée", "This application has already been rejected") });
 
     await query(
       `UPDATE instructor_applications
@@ -310,26 +315,45 @@ export const rejectInstructorApplication = async (req: AuthenticatedRequest, res
       [adminId, rejection_reason.trim(), id]
     );
 
+    // Une candidature précédemment acceptée qui est rejetée retire aussi le rôle (sinon l'accès reste ouvert).
+    if (app.status === "accepted") {
+      await query("UPDATE users SET role = 'student', updated_at = NOW() WHERE id = ? AND role = 'instructor'", [app.user_id]);
+    }
+
     // Email de refus
-    await sendEmail({
-      to: app.email,
-      subject: "Candidature instructeur — Décision de notre équipe",
-      html: `<p>Bonjour <strong>${app.first_name}</strong>,</p>
-             <p>Après examen de votre candidature, nous ne sommes pas en mesure de vous accepter comme instructeur pour le moment.</p>
-             <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;margin:16px 0;">
-               <p style="margin:0;color:#991b1b;"><strong>Motif :</strong> ${rejection_reason}</p>
-             </div>
-             <p>Cela ne signifie pas que votre candidature est définitivement refusée. Vous pouvez soumettre une nouvelle candidature dans 3 mois avec un profil enrichi.</p>
-             <p>Continuez d'apprendre sur la plateforme — nous espérons vous voir prochainement !</p>
-             <p>— L'équipe DevOpsAkademy</p>`,
-    }).catch(e => console.warn("Email reject instructor:", e.message));
+    await sendInstructorApplicationRejectedEmail(app.email, app.first_name, rejection_reason, await getUserLang(app.user_id))
+      .catch(e => console.warn("Email reject instructor:", e.message));
 
     return res.json({
       success: true,
-      message: "Candidature rejetée. Le candidat a été notifié par email.",
+      message: tr(req, "Candidature rejetée. Le candidat a été notifié par email.", "Application rejected. The applicant has been notified by email."),
     });
   } catch (error) {
     console.error("rejectInstructorApplication:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
+  }
+};
+
+// ══════════════════════════════════════════════════════
+// PATCH /api/instructor-applications/:id/review (admin)
+// Passer une candidature « en cours d'examen »
+// (le frontend appelait cette route, elle n'existait pas)
+// ══════════════════════════════════════════════════════
+export const markApplicationUnderReview = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const [app]: any = await query("SELECT id, status FROM instructor_applications WHERE id = ?", [id]);
+    if (!app) return res.status(404).json({ success: false, message: tr(req, "Candidature introuvable", "Application not found") });
+    if (app.status !== "pending") {
+      return res.status(409).json({ success: false, message: tr(req, "Seule une candidature en attente peut être mise en révision", "Only a pending application can be set under review") });
+    }
+    await query(
+      "UPDATE instructor_applications SET status = 'under_review', reviewed_by = ?, updated_at = NOW() WHERE id = ?",
+      [req.user?.id, id]
+    );
+    return res.json({ success: true, message: tr(req, "Candidature mise en révision", "Application set under review") });
+  } catch (error) {
+    console.error("markApplicationUnderReview:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };

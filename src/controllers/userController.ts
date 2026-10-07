@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { tr } from "../utils/lang";
 
 // ─────────────────────────────────────────────
 // GET /api/users  (admin)
@@ -16,7 +17,7 @@ export const getUsers = async (req: Request, res: Response) => {
     res.json({ success: true, data: users });
   } catch (error) {
     console.error('Get users error:', error);
-    res.status(500).json({ success: false, message: 'Erreur lors de la récupération des utilisateurs' });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la récupération des utilisateurs", "Error while retrieving users") });
   }
 };
 
@@ -40,14 +41,14 @@ export const getUserById = async (req: Request, res: Response) => {
     `, [id]);
 
     if (!users.length)
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur non trouvé", "User not found") });
 
     const user = users[0];
     delete user.password_hash;
     res.json({ success: true, data: user });
   } catch (error) {
     console.error('Get user error:', error);
-    res.status(500).json({ success: false, message: "Erreur lors de la récupération de l'utilisateur" });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la récupération de l'utilisateur", "Error while retrieving the user") });
   }
 };
 
@@ -61,16 +62,16 @@ export const updateUser = async (req: Request, res: Response) => {
 
     const existing: any[] = await query('SELECT id FROM users WHERE id = ?', [id]);
     if (!existing.length)
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur non trouvé", "User not found") });
 
     await query(
       'UPDATE users SET first_name = ?, last_name = ?, role = ?, is_active = ?, updated_at = NOW() WHERE id = ?',
       [first_name, last_name, role, is_active, id]
     );
-    res.json({ success: true, message: 'Utilisateur mis à jour avec succès' });
+    res.json({ success: true, message: tr(req, "Utilisateur mis à jour avec succès", "User updated successfully") });
   } catch (error) {
     console.error('Update user error:', error);
-    res.status(500).json({ success: false, message: "Erreur lors de la mise à jour de l'utilisateur" });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la mise à jour de l'utilisateur", "Error while updating the user") });
   }
 };
 
@@ -82,13 +83,13 @@ export const deleteUser = async (req: Request, res: Response) => {
     const { id } = req.params;
     const existing: any[] = await query('SELECT id FROM users WHERE id = ?', [id]);
     if (!existing.length)
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur non trouvé", "User not found") });
 
     await query('DELETE FROM users WHERE id = ?', [id]);
-    res.json({ success: true, message: 'Utilisateur supprimé avec succès' });
+    res.json({ success: true, message: tr(req, "Utilisateur supprimé avec succès", "User deleted successfully") });
   } catch (error) {
     console.error('Delete user error:', error);
-    res.status(500).json({ success: false, message: "Erreur lors de la suppression de l'utilisateur" });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la suppression de l'utilisateur", "Error while deleting the user") });
   }
 };
 
@@ -101,10 +102,10 @@ export const getUserProgress = async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
 
     if (!authReq.user)
-      return res.status(401).json({ success: false, message: 'Non authentifié' });
+      return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     if (parseInt(id) !== authReq.user.id && authReq.user.role !== 'admin')
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return res.status(403).json({ success: false, message: tr(req, "Accès non autorisé", "Unauthorized access") });
 
     const progress = await query(`
       SELECT
@@ -130,7 +131,7 @@ export const getUserProgress = async (req: Request, res: Response) => {
     res.json({ success: true, data: progress });
   } catch (error) {
     console.error('Get user progress error:', error);
-    res.status(500).json({ success: false, message: 'Erreur lors de la récupération de la progression' });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la récupération de la progression", "Error while retrieving progress") });
   }
 };
 
@@ -147,7 +148,7 @@ export const getProfile = async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
 
     if (!authReq.user?.id)
-      return res.status(401).json({ success: false, message: 'Non authentifié' });
+      return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const users: any[] = await query(`
       SELECT
@@ -166,7 +167,7 @@ export const getProfile = async (req: Request, res: Response) => {
     `, [authReq.user.id]);
 
     if (!users.length)
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return res.status(404).json({ success: false, message: tr(req, "Utilisateur non trouvé", "User not found") });
 
     const user = users[0];
     delete user.password_hash;
@@ -185,7 +186,7 @@ export const getProfile = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ success: false, message: 'Erreur lors de la récupération du profil' });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la récupération du profil", "Error while retrieving the profile") });
   }
 };
 
@@ -197,7 +198,7 @@ export const updateProfile = async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
 
     if (!authReq.user?.id)
-      return res.status(401).json({ success: false, message: 'Non authentifié' });
+      return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const userId = authReq.user.id;
     const {
@@ -291,12 +292,12 @@ export const updateProfile = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: 'Profil mis à jour avec succès',
+      message: tr(req, "Profil mis à jour avec succès", "Profile updated successfully"),
       data: { ...result, id: Number(result.id) },
     });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({ success: false, message: 'Erreur lors de la mise à jour du profil' });
+    res.status(500).json({ success: false, message: tr(req, "Erreur lors de la mise à jour du profil", "Error while updating the profile") });
   }
 };
 

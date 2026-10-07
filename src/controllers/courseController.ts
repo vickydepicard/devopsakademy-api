@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { query } from "../config/database";
 import slugify from "slugify";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { notifyAdmins } from "../services/notification.service";
+import { tr } from "../utils/lang";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER — Convertit récursivement les BigInt en Number (évite JSON.stringify crash)
@@ -9,6 +11,7 @@ import { AuthenticatedRequest } from "../middleware/auth";
 function convertBigInt(obj: any): any {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj === "bigint") return Number(obj);
+  if (obj instanceof Date) return obj;
   if (Array.isArray(obj)) return obj.map(convertBigInt);
   if (typeof obj === "object") {
     return Object.fromEntries(
@@ -39,8 +42,8 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
     const { title, description, price, level, category_id, requirements, learning_outcomes, is_free } = req.body;
     const user = req.user;
 
-    if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (!title) return res.status(400).json({ success: false, message: "Le titre du cours est obligatoire" });
+    if (!user) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (!title) return res.status(400).json({ success: false, message: tr(req, "Le titre du cours est obligatoire", "The course title is required") });
     // description is optional - use empty string if not provided
 
     const slug = slugify(title, { lower: true, strict: true }) + "-" + Date.now();
@@ -59,18 +62,18 @@ export const createCourse = async (req: AuthenticatedRequest, res: Response) => 
 
     return res.status(201).json({
       success: true,
-      message: "Cours créé avec succès",
+      message: tr(req, "Cours créé avec succès", "Course created successfully"),
       data: { id: Number((result as any).insertId), slug },
     });
   } catch (error) {
-    console.error("❌ createCourse:", error);
-    return res.status(500).json({ success: false, message: "Erreur lors de la création du cours" });
+    console.error("createCourse:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur lors de la création du cours", "Error while creating the course") });
   }
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ✅ Résoudre un courseId depuis un slug ou un ID numérique
+// Résoudre un courseId depuis un slug ou un ID numérique
 async function resolveCourseId(raw: string): Promise<number | null> {
   const num = Number(raw);
   if (!isNaN(num) && Number.isInteger(num)) return num;
@@ -140,8 +143,8 @@ export const getCourses = async (req: AuthenticatedRequest, res: Response) => {
 
     return res.json({ success: true, data: formatted, pagination: { page: Number(page), limit: Number(limit) } });
   } catch (error) {
-    console.error("❌ getCourses:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourses:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -152,7 +155,7 @@ export const getCourses = async (req: AuthenticatedRequest, res: Response) => {
 export const getUserCourses = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = req.user;
-    if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!user) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const courses = await query(
       `SELECT
@@ -170,8 +173,8 @@ export const getUserCourses = async (req: AuthenticatedRequest, res: Response) =
 
     return res.json({ success: true, data: convertBigInt(courses) });
   } catch (error) {
-    console.error("❌ getUserCourses:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getUserCourses:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -211,7 +214,7 @@ export const getCourseById = async (req: Request, res: Response) => {
        GROUP BY c.id`,
       [whereValue]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     // Tous les modules publiés avec leurs leçons (titre + durée + aperçu)
     const modulesRaw = await query(
@@ -250,8 +253,8 @@ export const getCourseById = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error("❌ getCourseById:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseById:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -268,8 +271,8 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
     const whereClause = isSlug ? "c.slug = ?" : "c.id = ?";
     const whereValue  = isSlug ? raw : courseId;
 
-    // ✅ COALESCE published_at pour éviter NULL → crash JSON
-    // ✅ Pas de filtre is_published → user connecté peut voir son cours inscrit
+    // COALESCE published_at pour éviter NULL → crash JSON
+    // Pas de filtre is_published → user connecté peut voir son cours inscrit
     const [course]: any = await query(
       `SELECT
          c.id, c.slug, c.title, c.description, c.short_description,
@@ -294,10 +297,10 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
       [whereValue]
     );
     if (!course) {
-      return res.status(404).json({ success: false, message: "Cours introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
     }
 
-    // ✅ Utiliser l'ID réel du cours (pas courseId du paramètre URL)
+    // Utiliser l'ID réel du cours (pas courseId du paramètre URL)
     const actualCourseId = Number(course.id);
 
     let isEnrolled = false, isApproved = false, completion_percentage = 0, enrollmentStatus = "not_enrolled";
@@ -318,7 +321,7 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
           enrollmentStatus      = enrollment.payment_status;
         }
       } catch (enrollErr) {
-        console.warn("⚠️ getCourseByIdEnhanced enrollment (non bloquant):", enrollErr);
+        console.warn("getCourseByIdEnhanced enrollment (non bloquant):", enrollErr);
       }
     }
 
@@ -349,7 +352,7 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
         })
       );
     } catch (modErr) {
-      console.warn("⚠️ getCourseByIdEnhanced modules (non bloquant):", modErr);
+      console.warn("getCourseByIdEnhanced modules (non bloquant):", modErr);
     }
 
     return res.json({
@@ -361,8 +364,8 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
       },
     });
   } catch (error) {
-    console.error("❌ getCourseByIdEnhanced:", error);
-    return res.status(500).json({ success: false, message: "Erreur lors du chargement du cours" });
+    console.error("getCourseByIdEnhanced:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur lors du chargement du cours", "Error while loading the course") });
   }
 };
 
@@ -374,18 +377,18 @@ export const getCourseByIdEnhanced = async (req: AuthenticatedRequest, res: Resp
 export const getCoursePublic = async (req: Request, res: Response): Promise<void> => {
   try {
     const courseId = Number(req.params.id);
-    if (isNaN(courseId)) { res.status(400).json({ success: false, message: "ID invalide" }); return; }
+    if (isNaN(courseId)) { res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") }); return; }
 
     const result = await query(
       `SELECT id, title, description, thumbnail_url, level, is_free, price FROM courses WHERE id = ?`,
       [courseId]
     );
-    if (!result.length) { res.status(404).json({ success: false, message: "Cours introuvable" }); return; }
+    if (!result.length) { res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") }); return; }
 
     res.json({ success: true, data: result[0] });
   } catch (error) {
-    console.error("❌ getCoursePublic:", error);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCoursePublic:", error);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -396,7 +399,7 @@ export const getCoursePublic = async (req: Request, res: Response): Promise<void
 export const getCoursePreview = async (req: Request, res: Response): Promise<void> => {
   try {
     const courseId = Number(req.params.id);
-    if (isNaN(courseId)) { res.status(400).json({ success: false, message: "ID invalide" }); return; }
+    if (isNaN(courseId)) { res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") }); return; }
 
     // Infos du cours + stats temps réel
     const [course]: any = await query(
@@ -417,7 +420,7 @@ export const getCoursePreview = async (req: Request, res: Response): Promise<voi
                 u.first_name, u.last_name`,
       [courseId]
     );
-    if (!course) { res.status(404).json({ success: false, message: "Cours introuvable" }); return; }
+    if (!course) { res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") }); return; }
 
     // Tous les modules publiés — GROUP BY explicite pour MariaDB strict mode
     const modulesRaw: any[] = await query(
@@ -507,8 +510,8 @@ export const getCoursePreview = async (req: Request, res: Response): Promise<voi
       }
     });
   } catch (error) {
-    console.error("❌ getCoursePreview:", error);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCoursePreview:", error);
+    res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -516,7 +519,7 @@ export const getCoursePreview = async (req: Request, res: Response): Promise<voi
 // GET COURSE CONTENT — Contenu complet pour étudiant inscrit + approuvé
 // GET /api/courses/:id/learn
 // ─────────────────────────────────────────────────────────────────────────────
-// ✅ FIX CRITIQUE : On n'utilise plus JSON_ARRAYAGG (retourne une string en
+// FIX CRITIQUE : On n'utilise plus JSON_ARRAYAGG (retourne une string en
 //    MariaDB, pas un vrai tableau). On fait des requêtes séparées par module.
 // ═════════════════════════════════════════════════════════════════════════════
 export const getCourseContent = async (req: AuthenticatedRequest, res: Response) => {
@@ -524,17 +527,18 @@ export const getCourseContent = async (req: AuthenticatedRequest, res: Response)
     const courseId = Number(req.params.id);
     const userId   = req.user?.id;
 
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
-    // Vérifier inscription approuvée
-    const [enrollment]: any = await query(
+    // Vérifier inscription approuvée (sauf mode enseignant, validé par le middleware)
+    const teacherMode = !!(req as any).teacherMode;
+    const [enrollment]: any = teacherMode ? [{ id: 0 }] : await query(
       `SELECT id FROM course_enrollments WHERE course_id = ? AND user_id = ? AND is_approved = 1`,
       [courseId, userId]
     );
     if (!enrollment) {
       return res.status(403).json({
         success: false,
-        message: "Vous devez être inscrit et approuvé pour accéder à ce contenu.",
+        message: tr(req, "Vous devez être inscrit et approuvé pour accéder à ce contenu.", "You must be enrolled and approved to access this content."),
         redirectTo: `/courses/${courseId}`,
       });
     }
@@ -547,7 +551,7 @@ export const getCourseContent = async (req: AuthenticatedRequest, res: Response)
        FROM courses c WHERE c.id = ?`,
       [courseId]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     // Modules publiés triés
     const modules: any[] = await query(
@@ -603,18 +607,21 @@ export const getCourseContent = async (req: AuthenticatedRequest, res: Response)
       [userId, courseId, courseId]
     );
 
-    // Mise à jour de la progression dans l'inscription
-    await query(
-      `UPDATE course_enrollments
-       SET completion_percentage = ?, last_accessed_at = NOW()
-       WHERE user_id = ? AND course_id = ?`,
-      [progress?.progress_percentage || 0, userId, courseId]
-    );
+    // Mise à jour de la progression dans l'inscription (jamais en mode enseignant)
+    if (!teacherMode) {
+      await query(
+        `UPDATE course_enrollments
+         SET completion_percentage = ?, last_accessed_at = NOW()
+         WHERE user_id = ? AND course_id = ?`,
+        [progress?.progress_percentage || 0, userId, courseId]
+      );
+    }
 
     return res.json({
       success: true,
       data: {
         ...convertBigInt(course),
+        teacher_mode: teacherMode,
         modules,
         progress: {
           totalLessons:     Number(progress?.total_lessons      || 0),
@@ -624,8 +631,8 @@ export const getCourseContent = async (req: AuthenticatedRequest, res: Response)
       },
     });
   } catch (error) {
-    console.error("❌ getCourseContent:", error);
-    return res.status(500).json({ success: false, message: "Erreur lors de la récupération du contenu." });
+    console.error("getCourseContent:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur lors de la récupération du contenu.", "Error while retrieving the content.") });
   }
 };
 
@@ -637,10 +644,10 @@ export const getCourseModules = async (req: Request, res: Response) => {
   try {
     const courseId = await resolveCourseId(req.params.id);
     const userId   = (req as any).user?.id || 0;
-    if (!courseId) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!courseId) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     const courses: any[] = await query(`SELECT id FROM courses WHERE id = ?`, [courseId]);
-    if (!courses.length) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!courses.length) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     const modules: any[] = await query(
       `SELECT id, title, description, order_index
@@ -672,8 +679,8 @@ export const getCourseModules = async (req: Request, res: Response) => {
 
     return res.json({ success: true, data: modules });
   } catch (error) {
-    console.error("❌ getCourseModules:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    console.error("getCourseModules:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -685,8 +692,8 @@ export const getCourseProgressForUser = async (req: Request, res: Response) => {
   try {
     const courseId = await resolveCourseId(req.params.id);
     const userId   = (req as any).user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (!courseId) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (!courseId) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     const progress: any[] = await query(
       `SELECT
@@ -736,8 +743,8 @@ export const getCourseProgressForUser = async (req: Request, res: Response) => {
 
     return res.json({ success: true, data: convertBigInt(progress) });
   } catch (error) {
-    console.error("❌ getCourseProgressForUser:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    console.error("getCourseProgressForUser:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -751,13 +758,14 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
     const lessonId = Number(req.params.lessonId);
     const userId   = req.user?.id;
 
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
-    const [enrollment]: any = await query(
+    const teacherMode = !!(req as any).teacherMode;
+    const [enrollment]: any = teacherMode ? [{ id: 0 }] : await query(
       `SELECT id FROM course_enrollments WHERE course_id = ? AND user_id = ? AND is_approved = 1`,
       [courseId, userId]
     );
-    if (!enrollment) return res.status(403).json({ success: false, message: "Accès refusé : non inscrit" });
+    if (!enrollment) return res.status(403).json({ success: false, message: tr(req, "Accès refusé : non inscrit", "Access denied: not enrolled") });
 
     const [lesson]: any = await query(
       `SELECT l.*, m.course_id FROM lessons l
@@ -765,7 +773,7 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
        WHERE l.id = ? AND m.course_id = ? AND l.is_published = 1`,
       [lessonId, courseId]
     );
-    if (!lesson) return res.status(404).json({ success: false, message: "Leçon introuvable" });
+    if (!lesson) return res.status(404).json({ success: false, message: tr(req, "Leçon introuvable", "Lesson not found") });
 
     const [progress]: any = await query(
       `SELECT is_completed, video_progress_seconds, video_duration_seconds, status
@@ -794,6 +802,8 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
       [lessonId]
     );
 
+    const [quizRow]: any = await query("SELECT id FROM quizzes WHERE lesson_id = ? ORDER BY id LIMIT 1", [lessonId]);
+
     // Si la leçon n'a pas de content_url direct mais a des ressources → utiliser la première
     const lessonData = convertBigInt(lesson);
     if (!lessonData.content_url && resources.length > 0) {
@@ -808,7 +818,7 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
       if (firstVideo) {
         lessonData.content_url  = firstVideo.file_url;
         lessonData.content_type = 'video';
-      } else if (firstPdf) {
+      } else if (firstPdf && !lessonData.article_content) {
         lessonData.content_url  = firstPdf.file_url;
         // Garder content_type=article pour afficher le PDF inline
       }
@@ -819,6 +829,8 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
       data: {
         ...lessonData,
         resources: convertBigInt(resources),
+        teacher_mode: teacherMode,
+        quiz_id: quizRow ? Number(quizRow.id) : null,
         progress: progress || {
           is_completed: 0, video_progress_seconds: 0,
           video_duration_seconds: 0, status: "not_started",
@@ -827,8 +839,8 @@ export const getLesson = async (req: AuthenticatedRequest, res: Response) => {
       },
     });
   } catch (error) {
-    console.error("❌ getLesson:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getLesson:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -851,20 +863,21 @@ export const updateLessonStatus = async (req: AuthenticatedRequest, res: Respons
     const user     = req.user;
     const { status, video_progress_seconds, video_duration_seconds } = req.body;
 
-    if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!user) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if ((req as any).teacherMode) return res.json({ success: true, teacher_mode: true });
     if (!["not_started", "in_progress", "completed"].includes(status))
-      return res.status(400).json({ success: false, message: "Statut invalide" });
+      return res.status(400).json({ success: false, message: tr(req, "Statut invalide", "Invalid status") });
 
     const [enrollment]: any = await query(
       `SELECT id FROM course_enrollments WHERE course_id = ? AND user_id = ?`, [courseId, user.id]
     );
-    if (!enrollment) return res.status(403).json({ success: false, message: "Non inscrit à ce cours" });
+    if (!enrollment) return res.status(403).json({ success: false, message: tr(req, "Non inscrit à ce cours", "Not enrolled in this course") });
 
     const [lesson]: any = await query(
       `SELECT id FROM lessons WHERE id = ? AND module_id IN (SELECT id FROM modules WHERE course_id = ?)`,
       [lessonId, courseId]
     );
-    if (!lesson) return res.status(404).json({ success: false, message: "Leçon introuvable" });
+    if (!lesson) return res.status(404).json({ success: false, message: tr(req, "Leçon introuvable", "Lesson not found") });
 
     await query(
       `INSERT INTO lesson_progress
@@ -909,10 +922,10 @@ export const updateLessonStatus = async (req: AuthenticatedRequest, res: Respons
       [pct, user.id, courseId]
     );
 
-    return res.json({ success: true, message: `Leçon mise à jour (${status})`, lessonId, status, newProgress: pct });
+    return res.json({ success: true, message: tr(req, `Leçon mise à jour (${status})`, `Lesson updated (${status})`), lessonId, status, newProgress: pct });
   } catch (error) {
-    console.error("❌ updateLessonStatus:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateLessonStatus:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -926,14 +939,15 @@ export const completeLesson = async (req: Request, res: Response) => {
     const lessonId = Number(req.params.lessonId);
     const userId   = (req as any).user?.id;
 
-    if (!userId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if ((req as any).teacherMode) return res.json({ success: true, teacher_mode: true });
 
     const lessons: any[] = await query(
       `SELECT l.id FROM lessons l JOIN modules m ON l.module_id = m.id
        WHERE l.id = ? AND m.course_id = ? AND l.is_published = 1`,
       [lessonId, courseId]
     );
-    if (!lessons.length) return res.status(404).json({ success: false, message: "Leçon introuvable" });
+    if (!lessons.length) return res.status(404).json({ success: false, message: tr(req, "Leçon introuvable", "Lesson not found") });
 
     // Upsert avec tous les champs NOT NULL
     await query(
@@ -984,13 +998,13 @@ export const completeLesson = async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      message: "Leçon marquée comme terminée",
+      message: tr(req, "Leçon marquée comme terminée", "Lesson marked as completed"),
       completion_percentage: pct,
       course_completed: pct === 100,
     });
   } catch (error) {
-    console.error("❌ completeLesson:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    console.error("completeLesson:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -1004,19 +1018,19 @@ export const enrollCourse = async (req: AuthenticatedRequest, res: Response) => 
     const user              = req.user;
     const { payment_proof_url } = req.body;
 
-    if (!user)           return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    if (!user)           return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (isNaN(courseId)) return res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") });
 
     const [course]: any = await query(
       `SELECT id, title, price, is_free, requires_approval FROM courses WHERE id = ? AND is_published = 1`,
       [courseId]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     const [existing]: any = await query(
       `SELECT id FROM course_enrollments WHERE course_id = ? AND user_id = ?`, [courseId, user.id]
     );
-    if (existing) return res.status(400).json({ success: false, message: "Déjà inscrit à ce cours" });
+    if (existing) return res.status(400).json({ success: false, message: tr(req, "Déjà inscrit à ce cours", "Already enrolled in this course") });
 
     const isApproved    = course.is_free ? 1 : 0;
     const paymentStatus = course.is_free ? "verified" : "pending";
@@ -1027,14 +1041,24 @@ export const enrollCourse = async (req: AuthenticatedRequest, res: Response) => 
       [user.id, courseId, isApproved, paymentStatus, payment_proof_url || null]
     );
 
+    if (!course.is_free) {
+      void notifyAdmins({
+        type: "new_enrollment",
+        title: "Inscription en attente de validation",
+        message: `${user.first_name || ""} ${user.last_name || ""} (${user.email || "—"}) s'est inscrit(e) à « ${course.title} »${payment_proof_url ? " avec une preuve de paiement." : "."}`,
+        link: "/admin/enrollments",
+        data: { course_id: courseId, user_id: user.id },
+      });
+    }
+
     return res.status(201).json({
       success: true,
       message: course.is_free ? "Inscription réussie !" : "Inscription soumise, en attente de validation",
       data: { course_id: courseId, requires_approval: !course.is_free, is_approved: isApproved, payment_status: paymentStatus },
     });
   } catch (error) {
-    console.error("❌ enrollCourse:", error);
-    return res.status(500).json({ success: false, message: "Erreur lors de l'inscription" });
+    console.error("enrollCourse:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur lors de l'inscription", "Error while enrolling") });
   }
 };
 
@@ -1047,8 +1071,8 @@ export const getEnrollmentStatus = async (req: AuthenticatedRequest, res: Respon
     const courseId = Number(req.params.id);
     const user     = req.user;
 
-    if (!user)           return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    if (!user)           return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (isNaN(courseId)) return res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") });
 
     const [enrollment]: any = await query(
       `SELECT ce.*, c.title AS course_title, c.is_free, c.price
@@ -1060,8 +1084,8 @@ export const getEnrollmentStatus = async (req: AuthenticatedRequest, res: Respon
     if (!enrollment) return res.json({ success: true, data: { enrolled: false } });
     return res.json({ success: true, data: { enrolled: true, ...convertBigInt(enrollment) } });
   } catch (error) {
-    console.error("❌ getEnrollmentStatus:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getEnrollmentStatus:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1091,8 +1115,8 @@ export const getPopularCourses = async (req: Request, res: Response) => {
     );
     return res.json({ success: true, data: convertBigInt(courses) });
   } catch (error) {
-    console.error("❌ getPopularCourses:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getPopularCourses:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1118,8 +1142,8 @@ export const getCourseFilters = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error("❌ getCourseFilters:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseFilters:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1132,14 +1156,14 @@ export const getCourseStudents = async (req: AuthenticatedRequest, res: Response
     const courseId = Number(req.params.id);
     const user     = req.user;
 
-    if (!user)           return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    if (!user)           return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (isNaN(courseId)) return res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") });
 
     const [course] = await query(
       `SELECT id FROM courses WHERE id = ? AND (instructor_id = ? OR ? = 'admin')`,
       [courseId, user.id, user.role]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable ou accès refusé" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable ou accès refusé", "Course not found or access denied") });
 
     const students = await query(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.role,
@@ -1150,8 +1174,8 @@ export const getCourseStudents = async (req: AuthenticatedRequest, res: Response
     );
     return res.json({ success: true, data: convertBigInt(students) });
   } catch (error) {
-    console.error("❌ getCourseStudents:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getCourseStudents:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1165,14 +1189,14 @@ export const updateCourse = async (req: AuthenticatedRequest, res: Response) => 
     const user     = req.user;
     const { title, description, price, level, category_id, is_published, requirements, learning_outcomes, is_free } = req.body;
 
-    if (!user)           return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    if (!user)           return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (isNaN(courseId)) return res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") });
 
     const [course] = await query(
       `SELECT id FROM courses WHERE id = ? AND (instructor_id = ? OR ? = 'admin')`,
       [courseId, user.id, user.role]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable ou accès refusé" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable ou accès refusé", "Course not found or access denied") });
 
     await query(
       `UPDATE courses
@@ -1185,10 +1209,10 @@ export const updateCourse = async (req: AuthenticatedRequest, res: Response) => 
     );
 
     const [updated] = await query(`SELECT * FROM courses WHERE id = ?`, [courseId]);
-    return res.json({ success: true, message: "Cours mis à jour", data: convertBigInt(updated) });
+    return res.json({ success: true, message: tr(req, "Cours mis à jour", "Course updated"), data: convertBigInt(updated) });
   } catch (error) {
-    console.error("❌ updateCourse:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateCourse:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1201,20 +1225,20 @@ export const deleteCourse = async (req: AuthenticatedRequest, res: Response) => 
     const courseId = Number(req.params.id);
     const user     = req.user;
 
-    if (!user)           return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (isNaN(courseId)) return res.status(400).json({ success: false, message: "ID invalide" });
+    if (!user)           return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (isNaN(courseId)) return res.status(400).json({ success: false, message: tr(req, "ID invalide", "Invalid ID") });
 
     const [course] = await query(
       `SELECT id FROM courses WHERE id = ? AND (instructor_id = ? OR ? = 'admin')`,
       [courseId, user.id, user.role]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable ou accès refusé" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable ou accès refusé", "Course not found or access denied") });
 
     await query(`DELETE FROM courses WHERE id = ?`, [courseId]);
-    return res.json({ success: true, message: "Cours supprimé avec succès" });
+    return res.json({ success: true, message: tr(req, "Cours supprimé avec succès", "Course deleted successfully") });
   } catch (error) {
-    console.error("❌ deleteCourse:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteCourse:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1238,26 +1262,26 @@ export const getModuleById = async (req: AuthenticatedRequest, res: Response) =>
     const [course]: any = await query(
       `SELECT id, is_published, instructor_id FROM courses WHERE id = ?`, [courseIdNum]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable", "Course not found") });
 
     const enrolled  = user ? await isUserEnrolled(courseIdNum, user.id) : false;
     const hasAccess = course.is_published || (user && (user.role === "admin" || user.id === course.instructor_id)) || enrolled;
-    if (!hasAccess) return res.status(403).json({ success: false, message: "Accès refusé" });
+    if (!hasAccess) return res.status(403).json({ success: false, message: tr(req, "Accès refusé", "Access denied") });
 
     const [module]: any = await query(
       `SELECT m.*, c.title AS course_title FROM modules m JOIN courses c ON m.course_id = c.id
        WHERE m.id = ? AND m.course_id = ?`,
       [moduleIdNum, courseIdNum]
     );
-    if (!module) return res.status(404).json({ success: false, message: "Module introuvable" });
+    if (!module) return res.status(404).json({ success: false, message: tr(req, "Module introuvable", "Module not found") });
 
     const lessons = await query(
       `SELECT * FROM lessons WHERE module_id = ? AND is_published = 1 ORDER BY order_index`, [moduleIdNum]
     );
     return res.json({ success: true, data: { ...convertBigInt(module), lessons: convertBigInt(lessons) } });
   } catch (error) {
-    console.error("❌ getModuleById:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getModuleById:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1270,14 +1294,14 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
     const { title, description, order_index, is_published } = req.body;
     const user = req.user;
 
-    if (!user)  return res.status(401).json({ success: false, message: "Non authentifié" });
-    if (!title) return res.status(400).json({ success: false, message: "Titre requis" });
+    if (!user)  return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
+    if (!title) return res.status(400).json({ success: false, message: tr(req, "Titre requis", "Title required") });
 
     const [course] = await query(
       `SELECT id FROM courses WHERE id = ? AND (instructor_id = ? OR ? = 'admin')`,
       [courseIdNum, user.id, user.role]
     );
-    if (!course) return res.status(404).json({ success: false, message: "Cours introuvable ou accès refusé" });
+    if (!course) return res.status(404).json({ success: false, message: tr(req, "Cours introuvable ou accès refusé", "Course not found or access denied") });
 
     let orderIndex = order_index;
     if (!orderIndex) {
@@ -1292,10 +1316,10 @@ export const createModule = async (req: AuthenticatedRequest, res: Response) => 
        VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
       [courseIdNum, title, description, orderIndex, is_published !== undefined ? is_published : 1]
     );
-    return res.status(201).json({ success: true, message: "Module créé", data: { id: (result as any).insertId } });
+    return res.status(201).json({ success: true, message: tr(req, "Module créé", "Module created"), data: { id: (result as any).insertId } });
   } catch (error) {
-    console.error("❌ createModule:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("createModule:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1309,26 +1333,26 @@ export const updateModule = async (req: AuthenticatedRequest, res: Response) => 
     const { title, description, order_index, is_published } = req.body;
     const user = req.user;
 
-    if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!user) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const [module]: any = await query(
       `SELECT m.*, c.instructor_id FROM modules m JOIN courses c ON m.course_id = c.id
        WHERE m.id = ? AND m.course_id = ?`,
       [moduleIdNum, courseIdNum]
     );
-    if (!module) return res.status(404).json({ success: false, message: "Module introuvable" });
+    if (!module) return res.status(404).json({ success: false, message: tr(req, "Module introuvable", "Module not found") });
     if (user.role !== "admin" && user.id !== module.instructor_id)
-      return res.status(403).json({ success: false, message: "Non autorisé" });
+      return res.status(403).json({ success: false, message: tr(req, "Non autorisé", "Not authorized") });
 
     await query(
       `UPDATE modules SET title=?, description=?, order_index=?, is_published=?, updated_at=NOW() WHERE id=?`,
       [title || module.title, description ?? module.description,
        order_index ?? module.order_index, is_published ?? module.is_published, moduleIdNum]
     );
-    return res.json({ success: true, message: "Module mis à jour" });
+    return res.json({ success: true, message: tr(req, "Module mis à jour", "Module updated") });
   } catch (error) {
-    console.error("❌ updateModule:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("updateModule:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1341,26 +1365,26 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
     const moduleIdNum = Number(req.params.moduleId);
     const user        = req.user;
 
-    if (!user) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!user) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const [module]: any = await query(
       `SELECT m.*, c.instructor_id FROM modules m JOIN courses c ON m.course_id = c.id
        WHERE m.id = ? AND m.course_id = ?`,
       [moduleIdNum, courseIdNum]
     );
-    if (!module) return res.status(404).json({ success: false, message: "Module introuvable" });
+    if (!module) return res.status(404).json({ success: false, message: tr(req, "Module introuvable", "Module not found") });
     if (user.role !== "admin" && user.id !== module.instructor_id)
-      return res.status(403).json({ success: false, message: "Non autorisé" });
+      return res.status(403).json({ success: false, message: tr(req, "Non autorisé", "Not authorized") });
 
     await query(`DELETE FROM modules WHERE id = ?`, [moduleIdNum]);
     await query(
       `UPDATE modules SET order_index = order_index - 1 WHERE course_id = ? AND order_index > ?`,
       [courseIdNum, module.order_index]
     );
-    return res.json({ success: true, message: "Module supprimé" });
+    return res.json({ success: true, message: tr(req, "Module supprimé", "Module deleted") });
   } catch (error) {
-    console.error("❌ deleteModule:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("deleteModule:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1374,7 +1398,7 @@ export const deleteModule = async (req: AuthenticatedRequest, res: Response) => 
 export const getInstructorCourses = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const instructorId = req.user?.id;
-    if (!instructorId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!instructorId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const courses = await query(
       `SELECT
@@ -1396,8 +1420,8 @@ export const getInstructorCourses = async (req: AuthenticatedRequest, res: Respo
 
     return res.json({ success: true, data: convertBigInt(courses) });
   } catch (error) {
-    console.error("❌ getInstructorCourses:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getInstructorCourses:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1409,7 +1433,7 @@ export const getInstructorCourses = async (req: AuthenticatedRequest, res: Respo
 export const getInstructorStats = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const instructorId = req.user?.id;
-    if (!instructorId) return res.status(401).json({ success: false, message: "Non authentifié" });
+    if (!instructorId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const [row]: any = await query(
       `SELECT
@@ -1427,8 +1451,8 @@ export const getInstructorStats = async (req: AuthenticatedRequest, res: Respons
 
     return res.json({ success: true, data: convertBigInt(row || {}) });
   } catch (error) {
-    console.error("❌ getInstructorStats:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getInstructorStats:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1464,8 +1488,8 @@ export const getPublicStats = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error("❌ getPublicStats:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getPublicStats:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
   }
 };
 
@@ -1495,8 +1519,29 @@ export const getFeaturedReviews = async (req: Request, res: Response) => {
     );
     return res.json({ success: true, data: convertBigInt(reviews) });
   } catch (error) {
-    console.error("❌ getFeaturedReviews:", error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    console.error("getFeaturedReviews:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur serveur", "Server error") });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TÉLÉCHARGER UNE RESSOURCE — POST /api/courses/:id/resources/:resourceId/download
+// Compte le téléchargement (sauf mode enseignant) et renvoie l'URL du fichier.
+// ═════════════════════════════════════════════════════════════════════════════
+export const downloadResource = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const courseId = Number(req.params.id);
+    const resourceId = Number(req.params.resourceId);
+    const [r]: any = await query(
+      `SELECT r.id, r.title, r.file_url FROM lesson_resources r
+         JOIN lessons l ON l.id = r.lesson_id JOIN modules m ON m.id = l.module_id
+        WHERE r.id = ? AND m.course_id = ?`, [resourceId, courseId]);
+    if (!r) return res.status(404).json({ success: false, message: tr(req, "Ressource introuvable", "Resource not found") });
+    if (!(req as any).teacherMode) await query("UPDATE lesson_resources SET download_count = download_count + 1 WHERE id = ?", [resourceId]);
+    return res.json({ success: true, data: { id: Number(r.id), title: r.title, file_url: r.file_url } });
+  } catch (error) {
+    console.error("downloadResource:", error);
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -1530,6 +1575,7 @@ export default {
   getLessonById,
   updateLessonStatus,
   completeLesson,
+  downloadResource,
   // ── Modules CRUD (instructeur/admin) ─────────
   getModules,
   getModuleById,
@@ -1537,3 +1583,4 @@ export default {
   updateModule,
   deleteModule,
 };
+

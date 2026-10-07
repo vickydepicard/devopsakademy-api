@@ -15,7 +15,7 @@ const swaggerSpec = swaggerJSDoc({
       },
     ],
 
-    // 🔐 SECURITY
+    // SECURITY
     components: {
       securitySchemes: {
         BearerAuth: {
@@ -25,7 +25,7 @@ const swaggerSpec = swaggerJSDoc({
         },
       },
 
-      // 🧠 SCHEMAS
+      // SCHEMAS
       schemas: {
         LoginRequest: {
           type: "object",

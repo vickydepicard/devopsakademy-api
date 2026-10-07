@@ -2,13 +2,14 @@
 import { Request, Response } from "express";
 import { query } from "../config/database";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { tr } from "../utils/lang";
 
 /* ── GET /api/certificates/my ── */
 export const getMyCertificates = async (req: Request, res: Response) => {
   try {
     const userId = (req as AuthenticatedRequest).user?.id;
     if (!userId)
-      return res.status(401).json({ success: false, message: "Non authentifié" });
+      return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
     const certificates: any[] = await query(
       `SELECT
@@ -36,7 +37,7 @@ export const getMyCertificates = async (req: Request, res: Response) => {
     return res.json({ success: true, data: certificates });
   } catch (error) {
     console.error("getMyCertificates error:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -45,7 +46,7 @@ export const verifyCertificate = async (req: Request, res: Response) => {
   try {
     const { number } = req.params;
     if (!number)
-      return res.status(400).json({ success: false, message: "Numéro requis" });
+      return res.status(400).json({ success: false, message: tr(req, "Numéro requis", "Number required") });
 
     const [cert]: any = await query(
       `SELECT
@@ -65,15 +66,15 @@ export const verifyCertificate = async (req: Request, res: Response) => {
     );
 
     if (!cert)
-      return res.status(404).json({ success: false, message: "Certificat introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Certificat introuvable", "Certificate not found") });
 
     if (cert.is_revoked)
-      return res.status(410).json({ success: false, message: "Ce certificat a été révoqué" });
+      return res.status(410).json({ success: false, message: tr(req, "Ce certificat a été révoqué", "This certificate has been revoked") });
 
     return res.json({ success: true, data: cert });
   } catch (error) {
     console.error("verifyCertificate error:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -82,7 +83,7 @@ export const issueCertificate = async (req: Request, res: Response) => {
   try {
     const { user_id, course_id } = req.body;
     if (!user_id || !course_id)
-      return res.status(400).json({ success: false, message: "user_id et course_id requis" });
+      return res.status(400).json({ success: false, message: tr(req, "user_id et course_id requis", "user_id and course_id are required") });
 
     // Récupérer l'enrollment (enrollment_id obligatoire)
     const [enrollment]: any = await query(
@@ -90,7 +91,7 @@ export const issueCertificate = async (req: Request, res: Response) => {
       [user_id, course_id]
     );
     if (!enrollment)
-      return res.status(404).json({ success: false, message: "Inscription introuvable" });
+      return res.status(404).json({ success: false, message: tr(req, "Inscription introuvable", "Enrollment not found") });
 
     const certNumber = `DA-${new Date().getFullYear()}-${String(course_id).padStart(4,"0")}-${String(user_id).padStart(5,"0")}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
 
@@ -116,10 +117,10 @@ export const issueCertificate = async (req: Request, res: Response) => {
       [user_id, course_id]
     );
 
-    return res.status(201).json({ success: true, message: "Certificat émis", data: cert });
+    return res.status(201).json({ success: true, message: tr(req, "Certificat émis", "Certificate issued"), data: cert });
   } catch (error) {
     console.error("issueCertificate error:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -145,7 +146,7 @@ export const getAllCertificates = async (req: Request, res: Response) => {
     return res.json({ success: true, data: certs });
   } catch (error) {
     console.error("getAllCertificates error:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 
@@ -154,10 +155,10 @@ export const deleteCertificate = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     await query("DELETE FROM certificates WHERE id = ?", [id]);
-    return res.json({ success: true, message: "Certificat supprimé" });
+    return res.json({ success: true, message: tr(req, "Certificat supprimé", "Certificate deleted") });
   } catch (error) {
     console.error("deleteCertificate error:", error);
-    return res.status(500).json({ success: false, message: "Erreur interne" });
+    return res.status(500).json({ success: false, message: tr(req, "Erreur interne", "Internal error") });
   }
 };
 

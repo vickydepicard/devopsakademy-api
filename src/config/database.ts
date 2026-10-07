@@ -22,10 +22,10 @@ const pool = mariadb.createPool({
 export const getConnection = async (): Promise<mariadb.PoolConnection> => {
   try {
     const connection = await pool.getConnection();
-    console.log('✅ Connected to MariaDB database');
+    console.log('Connected to MariaDB database');
     return connection;
   } catch (error) {
-    console.error('❌ Database connection failed:', error);
+    console.error('Database connection failed:', error);
     throw error;
   }
 };
@@ -41,6 +41,23 @@ export const query = async (sql: string, params: any[] = []): Promise<any> => {
     throw error;
   } finally {
     if (connection) await connection.release();
+  }
+};
+
+/** Exécute plusieurs requêtes dans une même transaction (rollback automatique en cas d'erreur). */
+export type TxQuery = (sql: string, params?: any[]) => Promise<any>;
+export const withTransaction = async <T>(fn: (q: TxQuery) => Promise<T>): Promise<T> => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await fn((sql, params = []) => connection.query(sql, params));
+    await connection.commit();
+    return result;
+  } catch (error) {
+    try { await connection.rollback(); } catch { /* ignore */ }
+    throw error;
+  } finally {
+    connection.release();
   }
 };
 

@@ -32,7 +32,7 @@ const PORT = process.env.PORT || 5000
 app.use(helmet())
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173", // ✅ corrigé pour Vite
+    origin: process.env.FRONTEND_URL || "http://localhost:5173", // corrigé pour Vite
     credentials: true,
   })
 )
@@ -55,16 +55,16 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes)
 app.use("/api/users", userRoutes)
 app.use("/api/courses", courseRoutes)
-app.use("/api/courses/:courseId/modules", moduleRoutes) // ✅ c'est ici qu'on branche
+app.use("/api/courses/:courseId/modules", moduleRoutes) // c'est ici qu'on branche
 app.use("/api/progress", progressRoutes)
 app.use("/api/forum", forumRoutes)
 app.use("/api/enrollments", enrollmentsRoutes)
 app.use("/api/courses", lessonProgressRoutes)    // Progression des leçons
-app.use("/api/admin", adminRoutes); // ✅ ← ajoute ceci
+app.use("/api/admin", adminRoutes); // ← ajoute ceci
 
 
 
-console.log("✅ Routes chargées : courses, modules, enrollments");
+console.log("Routes chargées : courses, modules, enrollments");
 
 
 app.use("/api/contacts", contactRoutes);
@@ -85,9 +85,9 @@ app.use("*", (req, res) => {
 app.use(errorHandler)
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`)
-  console.log(`📚 DevOpsAkademy API started`)
-  console.log(`🔗 Health check: http://localhost:${PORT}/health`)
+  console.log(`Server running on port ${PORT}`)
+  console.log(`DevOpsAkademy API started`)
+  console.log(`Health check: http://localhost:${PORT}/health`)
 })
 
 export default app

@@ -2,11 +2,12 @@
 import { Response } from "express"
 import { query } from "../config/database"
 import { AuthenticatedRequest } from "../middleware/auth"
+import { tr } from "../utils/lang";
 
 export const markLessonCompleted = async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user)
-      return res.status(403).json({ success: false, message: "Non authentifié" })
+      return res.status(403).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") })
 
     const { courseId, lessonId } = req.params
     const userId = req.user.id
@@ -19,7 +20,7 @@ export const markLessonCompleted = async (req: AuthenticatedRequest, res: Respon
       [lessonId, courseId]
     )
     if (!lesson)
-      return res.status(404).json({ success: false, message: "Leçon introuvable" })
+      return res.status(404).json({ success: false, message: tr(req, "Leçon introuvable", "Lesson not found") })
 
     // Insérer la progression (ignore si déjà complétée)
     await query(
@@ -79,7 +80,7 @@ export const markLessonCompleted = async (req: AuthenticatedRequest, res: Respon
 
     return res.json({
       success: true,
-      message: isComplete ? "Cours terminé ! Certificat généré 🎉" : "Leçon complétée",
+      message: isComplete ? "Cours terminé ! Certificat généré" : "Leçon complétée",
       data: {
         completion_percentage,
         course_completed: isComplete,
@@ -89,6 +90,6 @@ export const markLessonCompleted = async (req: AuthenticatedRequest, res: Respon
     })
   } catch (err) {
     console.error("Mark lesson error:", err)
-    return res.status(500).json({ success: false, message: "Erreur progression leçon" })
+    return res.status(500).json({ success: false, message: tr(req, "Erreur progression leçon", "Lesson progress error") })
   }
 }
