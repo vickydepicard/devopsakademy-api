@@ -6,6 +6,7 @@ import { sendInstructorApplicationReceivedEmail, sendInstructorApplicationAccept
 import { getUserLang, langFromReq } from "../utils/lang";
 import { notifyAdmins } from "../services/notification.service";
 import { tr } from "../utils/lang";
+import { ensureApplicationReviewTables } from "./applicationReviewController";
 
 // ══════════════════════════════════════════════════════
 // POST /api/instructor-applications
@@ -16,17 +17,21 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, message: tr(req, "Non authentifié", "Not authenticated") });
 
+    await ensureApplicationReviewTables();
     const {
       motivation, experience, expertise_areas, years_experience,
       linkedin_url, portfolio_url, cv_url,
-      proposed_course_title, proposed_course_description,
+      proposed_course_title, sample_course_topic, proposed_course_description,
+      certifications, video_url, weekly_hours, charter_accepted,
+      proposed_course_category, proposed_course_level,
     } = req.body;
 
     // Validation (messages dans la langue de l'utilisateur)
     const errors: Record<string, string> = {};
     const motivationText = String(motivation ?? "").trim();
     const experienceText = String(experience ?? "").trim();
-    const courseTitle = String(proposed_course_title ?? "").trim();
+    // Le formulaire d'inscription envoie `sample_course_topic`, celui de /become-instructor `proposed_course_title`
+    const courseTitle = String(proposed_course_title ?? sample_course_topic ?? "").trim();
     const yearsNum = Number(years_experience);
     if (motivationText.length < 50)
       errors.motivation = tr(req, "La motivation doit contenir au moins 50 caractères", "Your motivation must contain at least 50 characters");
@@ -48,6 +53,12 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
       errors.portfolio_url = tr(req, "URL du portfolio invalide", "Invalid portfolio URL");
     if (cv_url && !urlOk(cv_url))
       errors.cv_url = tr(req, "URL du CV invalide", "Invalid CV URL");
+    if (video_url && !urlOk(video_url))
+      errors.video_url = tr(req, "URL de la vidéo invalide", "Invalid video URL");
+    const certs: string[] = (Array.isArray(certifications) ? certifications : String(certifications ?? "").split(/[,;\n]/))
+      .map((c: any) => String(c).trim()).filter(Boolean).slice(0, 20);
+    const weeklyHours = Number.isInteger(Number(weekly_hours)) && Number(weekly_hours) > 0 && Number(weekly_hours) <= 80
+      ? Number(weekly_hours) : null;
     const areas: string[] = Array.isArray(expertise_areas)
       ? expertise_areas.map((a: any) => String(a).trim()).filter(Boolean).slice(0, 20)
       : [];
@@ -87,8 +98,9 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
     const result: any = await query(
       `INSERT INTO instructor_applications
          (user_id, motivation, experience, years_experience, expertise_areas, linkedin_url, portfolio_url, cv_url,
-          sample_course_topic, proposed_course_description, status, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
+          sample_course_topic, proposed_course_description, certifications, video_url, weekly_hours, charter_accepted,
+          proposed_course_category, proposed_course_level, status, submitted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
       [
         userId,
         motivationText,
@@ -100,6 +112,12 @@ export const submitInstructorApplication = async (req: AuthenticatedRequest, res
         String(cv_url || "").trim() || null,
         courseTitle,
         String(proposed_course_description || "").trim().slice(0, 5000) || null,
+        certs.length ? JSON.stringify(certs) : null,
+        String(video_url || "").trim() || null,
+        weeklyHours,
+        charter_accepted ? 1 : 0,
+        String(proposed_course_category || "").trim().slice(0, 150) || null,
+        ["beginner", "intermediate", "advanced"].includes(proposed_course_level) ? proposed_course_level : null,
       ]
     );
 
@@ -163,6 +181,7 @@ export const getMyInstructorApplication = async (req: AuthenticatedRequest, res:
 // ══════════════════════════════════════════════════════
 export const getAllInstructorApplications = async (req: AuthenticatedRequest, res: Response) => {
   try {
+    await ensureApplicationReviewTables();
     const { status, page = 1, limit = 20 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
@@ -174,9 +193,18 @@ export const getAllInstructorApplications = async (req: AuthenticatedRequest, re
     }
 
     const apps: any[] = await query(
-      `SELECT ia.id, ia.status, ia.motivation, ia.experience, ia.linkedin_url,
+      `SELECT ia.id, ia.status, ia.motivation, ia.experience, ia.linkedin_url, ia.portfolio_url, ia.cv_url,
+              ia.years_experience, ia.expertise_areas, ia.proposed_course_description, ia.certifications,
+              ia.video_url, ia.weekly_hours, ia.charter_accepted, ia.candidate_can_reply, ia.evaluation,
+              ia.proposed_course_category, ia.proposed_course_level, (ia.cv_file IS NOT NULL) AS has_cv_file,
               ia.sample_course_topic, ia.review_note, ia.submitted_at, ia.reviewed_at,
-              u.id AS user_id, u.first_name, u.last_name, u.email, u.created_at AS user_since
+              u.id AS user_id, u.first_name, u.last_name, u.email, u.created_at AS user_since,
+              (SELECT MIN(ii.scheduled_at) FROM instructor_interviews ii
+                WHERE ii.application_id = ia.id AND ii.status IN ('proposed','confirmed') AND ii.scheduled_at >= NOW()) AS next_interview_at,
+              (SELECT ii.status FROM instructor_interviews ii
+                WHERE ii.application_id = ia.id AND ii.status IN ('proposed','confirmed') AND ii.scheduled_at >= NOW()
+                ORDER BY ii.scheduled_at ASC LIMIT 1) AS next_interview_status,
+              (SELECT COUNT(*) FROM instructor_application_comments c WHERE c.application_id = ia.id) AS comment_count
        FROM instructor_applications ia
        JOIN users u ON u.id = ia.user_id
        ${where}
@@ -206,7 +234,7 @@ export const getAllInstructorApplications = async (req: AuthenticatedRequest, re
 
     return res.json({
       success: true,
-      data: apps,
+      data: apps.map((a: any) => ({ ...a, comment_count: Number(a.comment_count || 0), has_cv_file: !!Number(a.has_cv_file) })),
       stats,
       pagination: { total: Number(countRow?.total || 0), page: Number(page), limit: Number(limit) },
     });
@@ -263,9 +291,9 @@ export const approveInstructorApplication = async (req: AuthenticatedRequest, re
       [adminId, note || null, id]
     );
 
-    // Promouvoir l'utilisateur en instructeur
+    // Promouvoir l'utilisateur en instructeur (sans jamais rétrograder un admin)
     await query(
-      "UPDATE users SET role = 'instructor', updated_at = NOW() WHERE id = ?",
+      "UPDATE users SET role = 'instructor', updated_at = NOW() WHERE id = ? AND role NOT IN ('admin','superadmin')",
       [app.user_id]
     );
 

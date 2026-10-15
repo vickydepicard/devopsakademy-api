@@ -5,6 +5,7 @@ import { authenticate, authorizeRoles } from "../middleware/auth";
 import { requireInstructorOrAdmin } from "../middleware/permissions";
 import { uploadVideo, uploadResource, uploadThumb } from "../controllers/adminController";
 import * as portal from "../controllers/instructorPortalController";
+import { requireSignedAgreement } from "../controllers/programOnboardingController";
 import {
   getCourseCoInstructors, addCoInstructor, updateCoInstructorCommission,
   removeCoInstructor, respondToInvitation, getMyInvitations,
@@ -30,7 +31,7 @@ router.get("/courses", portal.listCourses);
 router.post("/courses", portal.createCourse);
 router.get("/courses/:id", guardCourse("view"), portal.getCourse);
 router.patch("/courses/:id", guardCourse("edit"), portal.updateCourse);
-router.post("/courses/:id/submit", guardCourse("manage"), portal.submitCourse);
+router.post("/courses/:id/submit", guardCourse("manage"), requireSignedAgreement, portal.submitCourse);
 router.post("/courses/:id/withdraw", guardCourse("manage"), portal.withdrawCourse);
 router.delete("/courses/:id", guardCourse("manage"), portal.deleteCourse);
 router.post("/courses/:id/thumbnail", guardCourse("edit"), uploadThumb.single("thumbnail"), portal.saveCourseThumbnail);

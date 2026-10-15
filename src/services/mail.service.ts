@@ -12,6 +12,8 @@ interface SendEmailParams {
   html: string;
   text?: string;     // version texte optionnelle
   replyTo?: string;  // réponse à une adresse différente
+  icalEvent?: { method: string; content: string }; // invitation calendrier (.ics)
+  headers?: Record<string, string>;                // ex : List-Unsubscribe
 }
 
 // ══════════════════════════════════════
@@ -48,7 +50,7 @@ function getTransporter(): nodemailer.Transporter {
 // ══════════════════════════════════════
 // FONCTION PRINCIPALE
 // ══════════════════════════════════════
-export const sendEmail = async ({ to, subject, html, text, replyTo }: SendEmailParams): Promise<void> => {
+export const sendEmail = async ({ to, subject, html, text, replyTo, icalEvent, headers }: SendEmailParams): Promise<void> => {
   try {
     const transporter = getTransporter();
     const fromName  = process.env.MAIL_FROM_NAME  || "DevOpsAkademy";
@@ -61,6 +63,8 @@ export const sendEmail = async ({ to, subject, html, text, replyTo }: SendEmailP
       html,
       text:    text || html.replace(/<[^>]+>/g, ""),
       replyTo: replyTo || fromEmail,
+      ...(icalEvent ? { icalEvent } : {}),
+      ...(headers ? { headers } : {}),
     });
 
     console.log(`Email envoyé → ${to} | ID: ${info.messageId}`);
@@ -456,6 +460,164 @@ export const sendInstructorApplicationRejectedEmail = async (
   });
 };
 
+// ── 13b. Candidature instructeur : échanges & entretiens ─────────
+export interface InterviewMailInfo {
+  scheduledAt: Date | string;
+  durationMin: number;
+  mode: "platform" | "external" | "phone";
+  joinUrl?: string | null;     // lien plateforme ou lien externe
+  message?: string | null;
+}
+
+const fmtWhen = (d: Date | string, lang: Lang): string =>
+  new Date(d).toLocaleString(lang === "en" ? "en-GB" : "fr-FR", {
+    dateStyle: "full", timeStyle: "short", timeZone: "Africa/Douala",
+  }) + " (Douala, UTC+1)";
+
+const toIcsDate = (d: Date): string => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+export const buildInterviewIcs = (uid: string, info: InterviewMailInfo, summary: string, method = "REQUEST"): string => {
+  const start = new Date(info.scheduledAt);
+  const end = new Date(start.getTime() + info.durationMin * 60000);
+  const esc2 = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+  return [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//DevOpsAkademy//Interview//FR", `METHOD:${method}`,
+    "BEGIN:VEVENT",
+    `UID:${uid}@devopsakademy`,
+    `DTSTAMP:${toIcsDate(new Date())}`,
+    `DTSTART:${toIcsDate(start)}`,
+    `DTEND:${toIcsDate(end)}`,
+    `SUMMARY:${esc2(summary)}`,
+    info.joinUrl ? `URL:${info.joinUrl}` : "",
+    info.joinUrl ? `LOCATION:${esc2(info.joinUrl)}` : "",
+    `STATUS:${method === "CANCEL" ? "CANCELLED" : "CONFIRMED"}`,
+    "END:VEVENT", "END:VCALENDAR",
+  ].filter(Boolean).join("\r\n");
+};
+
+const interviewCard = (info: InterviewMailInfo, lang: Lang): string => {
+  const t = l(lang);
+  const modeLabel = info.mode === "phone" ? t("Appel téléphonique", "Phone call") : t("Visioconférence", "Video call");
+  return card(`
+    <p style="margin:0 0 6px;color:#2d287f;font-size:15px;"><strong>${esc(fmtWhen(info.scheduledAt, lang))}</strong></p>
+    <p style="margin:0;color:#555;font-size:14px;">${modeLabel} · ${info.durationMin} min</p>
+    ${info.message ? `<p style="margin:10px 0 0;color:#555;font-size:14px;">${esc(info.message)}</p>` : ""}`);
+};
+
+export const sendInterviewProposedEmail = async (
+  to: string, firstName: string, slots: Date[], info: Omit<InterviewMailInfo, "scheduledAt">, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${t("Un échange est proposé pour votre candidature", "An interview is proposed for your application")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    <p style="color:#555;font-size:15px;line-height:1.6;">
+      ${t("Notre équipe souhaite échanger avec vous avant de statuer sur votre candidature. Voici le ou les créneaux proposés :",
+          "Our team would like to talk with you before deciding on your application. Here are the proposed slots:")}
+    </p>
+    ${slots.map(s => interviewCard({ ...info, scheduledAt: s }, lang)).join("")}
+    <p style="color:#555;font-size:15px;line-height:1.6;">
+      ${t("Connectez-vous pour <strong>accepter un créneau</strong> ou en demander un autre.",
+          "Log in to <strong>accept a slot</strong> or ask for another one.")}
+    </p>
+    ${button(fe("/become-instructor"), t("Répondre à la proposition", "Reply to the proposal"))}`;
+  await sendEmail({
+    to,
+    subject: t("Entretien proposé — candidature instructeur DevOpsAkademy", "Interview proposed — DevOpsAkademy instructor application"),
+    html: baseTemplate(content, t("Entretien proposé", "Interview proposed"), lang),
+  });
+};
+
+export const sendInterviewConfirmedEmail = async (
+  to: string, firstName: string, uid: string, info: InterviewMailInfo, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#059669;margin:0 0 8px;">${t("Entretien confirmé", "Interview confirmed")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    <p style="color:#555;font-size:15px;line-height:1.6;">${t("Votre entretien est confirmé :", "Your interview is confirmed:")}</p>
+    ${interviewCard(info, lang)}
+    ${info.joinUrl ? button(info.joinUrl, t("Rejoindre l'entretien", "Join the interview"), "#059669,#10b981") : ""}
+    <p style="color:#888;font-size:13px;">${t("Une invitation calendrier est jointe à cet email.", "A calendar invitation is attached to this email.")}</p>`;
+  await sendEmail({
+    to,
+    subject: t("Entretien confirmé — DevOpsAkademy", "Interview confirmed — DevOpsAkademy"),
+    html: baseTemplate(content, t("Entretien confirmé", "Interview confirmed"), lang),
+    icalEvent: { method: "REQUEST", content: buildInterviewIcs(uid, info, t("Entretien instructeur DevOpsAkademy", "DevOpsAkademy instructor interview")) },
+  });
+};
+
+export const sendInterviewCancelledEmail = async (
+  to: string, firstName: string, uid: string, info: InterviewMailInfo, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${t("Entretien annulé", "Interview cancelled")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    <p style="color:#555;font-size:15px;line-height:1.6;">${t("L'entretien suivant a été annulé. Nous vous recontacterons pour un nouveau créneau.", "The following interview has been cancelled. We will contact you for a new slot.")}</p>
+    ${interviewCard(info, lang)}`;
+  await sendEmail({
+    to,
+    subject: t("Entretien annulé — DevOpsAkademy", "Interview cancelled — DevOpsAkademy"),
+    html: baseTemplate(content, t("Entretien annulé", "Interview cancelled"), lang),
+    icalEvent: { method: "CANCEL", content: buildInterviewIcs(uid, info, t("Entretien instructeur DevOpsAkademy", "DevOpsAkademy instructor interview"), "CANCEL") },
+  });
+};
+
+export const sendInterviewReminderEmail = async (
+  to: string, firstName: string, info: InterviewMailInfo, hoursBefore: number, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${t("Rappel : entretien", "Reminder: interview")} ${hoursBefore >= 24 ? t("demain", "tomorrow") : t("dans 1 heure", "in 1 hour")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    ${interviewCard(info, lang)}
+    ${info.joinUrl ? button(info.joinUrl, t("Rejoindre l'entretien", "Join the interview")) : ""}`;
+  await sendEmail({
+    to,
+    subject: t("Rappel entretien — DevOpsAkademy", "Interview reminder — DevOpsAkademy"),
+    html: baseTemplate(content, t("Rappel entretien", "Interview reminder"), lang),
+  });
+};
+
+export const sendApplicationCommentEmail = async (
+  to: string, firstName: string, body: string, canReply: boolean, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${t("Message de l'équipe DevOpsAkademy", "Message from the DevOpsAkademy team")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    <p style="color:#555;font-size:15px;line-height:1.6;">${t("Concernant votre candidature instructeur :", "Regarding your instructor application:")}</p>
+    ${card(`<p style="margin:0;color:#333;font-size:14px;white-space:pre-line;">${esc(body)}</p>`)}
+    ${button(fe("/become-instructor"), canReply ? t("Voir et répondre", "View and reply") : t("Voir ma candidature", "View my application"))}`;
+  await sendEmail({
+    to,
+    subject: t("Message concernant votre candidature — DevOpsAkademy", "Message about your application — DevOpsAkademy"),
+    html: baseTemplate(content, t("Message de l'équipe", "Message from the team"), lang),
+  });
+};
+
+export const sendInformationRequestEmail = async (
+  to: string, firstName: string, fieldLabels: string[], message: string | null, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${t("Merci de compléter votre dossier", "Please complete your application")}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    <p style="color:#555;font-size:15px;line-height:1.6;">
+      ${t("Pour étudier votre candidature instructeur, notre équipe a besoin des informations suivantes :",
+          "To review your instructor application, our team needs the following information:")}
+    </p>
+    ${card(`<ul style="margin:0;padding-left:18px;color:#333;font-size:14px;line-height:1.8;">${fieldLabels.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`)}
+    ${message ? card(`<p style="margin:0;color:#555;font-size:14px;white-space:pre-line;">${esc(message)}</p>`, "#fffbeb", "#fde68a") : ""}
+    ${button(fe("/become-instructor"), t("Compléter mon dossier", "Complete my application"))}`;
+  await sendEmail({
+    to,
+    subject: t("Complément d'information demandé — candidature DevOpsAkademy", "Information requested — DevOpsAkademy application"),
+    html: baseTemplate(content, t("Complément demandé", "Information requested"), lang),
+  });
+};
+
 // ── 14. Invitation co-instructeur ───────────────────
 export const sendCoInstructorInviteEmail = async (
   to: string, firstName: string, courseTitle: string, commissionRate: number | string, lang: Lang = DEFAULT_LANG
@@ -559,4 +721,18 @@ export const testEmailConnection = async (): Promise<boolean> => {
     console.error("Connexion SMTP échouée:", err.message);
     return false;
   }
+};
+
+// ── Programme instructeurs : email générique (onboarding, annonces, messages, contrat…) ──
+export const sendProgramEmail = async (
+  to: string, firstName: string, subject: string, title: string, body: string,
+  cta?: { path: string; label: string }, lang: Lang = DEFAULT_LANG
+): Promise<void> => {
+  const t = l(lang);
+  const content = `
+    <h2 style="color:#2d287f;margin:0 0 8px;">${esc(title)}</h2>
+    <p style="color:#555;font-size:15px;">${t("Bonjour", "Hello")} <strong>${esc(firstName)}</strong>,</p>
+    ${card(`<p style="margin:0;color:#333;font-size:14px;line-height:1.7;white-space:pre-line;">${esc(body)}</p>`)}
+    ${cta ? button(fe(cta.path), esc(cta.label)) : ""}`;
+  await sendEmail({ to, subject, html: baseTemplate(content, title, lang) });
 };

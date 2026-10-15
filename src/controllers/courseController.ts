@@ -104,8 +104,8 @@ export const getCourses = async (req: AuthenticatedRequest, res: Response) => {
 
     const courses = await query(
       `SELECT
-         c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.is_free,
-         c.level, c.language, c.is_featured, c.is_published,
+         c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.original_price, c.is_free,
+         c.level, c.language, c.is_featured, c.is_published, c.category_id,
          c.rating, c.review_count, c.created_at,
          cat.name AS category_name,
          u.first_name, u.last_name,
@@ -1097,7 +1097,7 @@ export const getPopularCourses = async (req: Request, res: Response) => {
   try {
     const courses = await query(
       `SELECT
-         c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.is_free,
+         c.id, c.title, c.short_description, c.thumbnail_url, c.price, c.original_price, c.category_id, c.is_free,
          c.level, c.language, c.is_featured, c.duration_hours,
          cat.name AS category_name, u.first_name, u.last_name,
          COUNT(DISTINCT ce.user_id)             AS student_count,

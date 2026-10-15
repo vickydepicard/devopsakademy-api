@@ -53,10 +53,21 @@ export async function recordCommissionsForEnrollment(enrollmentId: number): Prom
     const sale = Number(payment.amount);
     if (!(sale > 0)) return;
 
-    const courseRate =
-      row.instructor_commission_rate !== null && row.instructor_commission_rate !== undefined
-        ? Number(row.instructor_commission_rate)
-        : defaultCommissionRate();
+    // taux du cours > taux du palier de l'instructeur > taux par défaut de la plateforme
+    let courseRate: number;
+    if (row.instructor_commission_rate !== null && row.instructor_commission_rate !== undefined) {
+      courseRate = Number(row.instructor_commission_rate);
+    } else {
+      courseRate = defaultCommissionRate();
+      try {
+        const [tier]: any = await query(
+          `SELECT t.default_commission_rate FROM instructor_tier_assignments a
+             JOIN instructor_tiers t ON t.id = a.tier_id AND t.is_active = 1 WHERE a.user_id = ?`,
+          [row.instructor_id]
+        );
+        if (tier) courseRate = Number(tier.default_commission_rate);
+      } catch { /* tables du programme pas encore créées : taux par défaut */ }
+    }
 
     const coInstructors: any[] = await query(
       "SELECT instructor_id, commission_rate FROM course_instructors WHERE course_id = ? AND status = 'accepted'",

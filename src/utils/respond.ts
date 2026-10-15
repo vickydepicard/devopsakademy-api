@@ -14,7 +14,7 @@ export const serverError = (req: Request, res: Response, label: string, error: a
 /** Nombre (DECIMAL/BigInt/string du driver MariaDB) → Number, null conservé. */
 export const toNum = (v: any): number | null => (v === null || v === undefined ? null : Number(v));
 
-export type AuditCategory = "admin" | "payment" | "subscription" | "system" | "course" | "user";
+export type AuditCategory = "admin" | "payment" | "subscription" | "system" | "course" | "user" | "commission";
 
 /** Journal d'audit (table audit_logs) — ne bloque jamais l'action. */
 export async function logAudit(

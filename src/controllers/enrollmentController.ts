@@ -7,6 +7,21 @@ import { notifyAdmins } from "../services/notification.service";
 import { query } from '../config/database'
 import { AuthenticatedRequest } from '../middleware/auth'
 import { tr } from "../utils/lang";
+import { checkCoupon, reserveCoupon, releaseCouponForEnrollment, amountDueForEnrollment, CouponError } from "../services/coupon.service";
+
+const COUPON_MESSAGES: Record<CouponError, [string, string]> = {
+  NOT_FOUND: ["Code promo invalide.", "Invalid promo code."],
+  INACTIVE: ["Ce code promo n'est plus actif.", "This promo code is no longer active."],
+  NOT_STARTED: ["Ce code promo n'est pas encore valable.", "This promo code is not valid yet."],
+  EXPIRED: ["Ce code promo a expiré.", "This promo code has expired."],
+  EXHAUSTED: ["Ce code promo a atteint sa limite d'utilisation.", "This promo code has reached its usage limit."],
+  USER_LIMIT: ["Vous avez déjà utilisé ce code.", "You have already used this code."],
+  NOT_APPLICABLE: ["Ce code ne s'applique pas à ce cours.", "This code does not apply to this course."],
+  MIN_AMOUNT: ["Montant minimum non atteint pour ce code.", "Minimum amount not reached for this code."],
+  FREE_COURSE: ["Ce cours est déjà gratuit.", "This course is already free."],
+  PROMO_ACTIVE: ["Ce cours est déjà en promotion : le code n'est pas cumulable.", "This course is already on promotion: the code cannot be combined."],
+};
+export const couponMessage = (req: Request, e: CouponError) => tr(req, COUPON_MESSAGES[e][0], COUPON_MESSAGES[e][1]);
 
 // POST /api/enrollments
 export const enroll = async (req: Request, res: Response) => {
@@ -32,15 +47,37 @@ export const enroll = async (req: Request, res: Response) => {
     if (existing.length)
       return res.status(409).json({ success: false, message: tr(req, "Déjà inscrit", "Already enrolled"), data: existing[0] })
 
-    const isFree = course.is_free === 1 || Number(course.price) === 0
+    const originallyFree = course.is_free === 1 || Number(course.price) === 0
+
+    // Code promo (facultatif) : validé côté serveur, jamais d'après le prix envoyé par le navigateur
+    let couponId: number | null = null
+    let couponInfo: { code: string; discount: number; final_price: number } | null = null
+    if (!originallyFree && req.body?.coupon_code) {
+      const chk = await checkCoupon(req.body.coupon_code, userId, Number(course_id))
+      if (!chk.ok) return res.status(400).json({ success: false, code: chk.error, message: couponMessage(req, chk.error!) })
+      if (!(await reserveCoupon(Number(chk.coupon.id), userId, chk.discount)))
+        return res.status(400).json({ success: false, code: 'EXHAUSTED', message: couponMessage(req, 'EXHAUSTED') })
+      couponId = Number(chk.coupon.id)
+      couponInfo = { code: String(chk.coupon.code), discount: chk.discount, final_price: chk.final }
+    }
+    const isFree = originallyFree || (couponInfo !== null && couponInfo.final_price === 0)
     const paymentStatus = isFree ? 'free' : 'pending'
     const isApproved = isFree ? 1 : 0
 
-    const result: any = await query(
-      `INSERT INTO course_enrollments (user_id, course_id, enrollment_type, payment_status, is_approved, enrolled_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [userId, course_id, isFree ? 'free' : 'individual', paymentStatus, isApproved]
-    )
+    let result: any
+    try {
+      result = await query(
+        `INSERT INTO course_enrollments (user_id, course_id, enrollment_type, payment_status, is_approved, coupon_id, enrolled_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        [userId, course_id, isFree ? 'free' : 'individual', paymentStatus, isApproved, couponId]
+      )
+    } catch (insertErr) {
+      if (couponId) {   // l'inscription a échoué : on rend le code
+        await query("DELETE FROM coupon_usages WHERE coupon_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1", [couponId, userId]).catch(() => {})
+        await query("UPDATE coupons SET uses_count = GREATEST(uses_count - 1, 0) WHERE id = ?", [couponId]).catch(() => {})
+      }
+      throw insertErr
+    }
 
     // Notifier les admins d'une inscription (non bloquant)
     void (async () => {
@@ -57,7 +94,7 @@ export const enroll = async (req: Request, res: Response) => {
     return res.status(201).json({
       success: true,
       message: isFree ? 'Inscription réussie — accès immédiat' : 'Inscription créée — en attente de paiement',
-      data: { enrollment_id: Number(result.insertId), payment_status: paymentStatus, is_approved: isApproved, is_free: isFree },
+      data: { enrollment_id: Number(result.insertId), payment_status: paymentStatus, is_approved: isApproved, is_free: isFree, coupon: couponInfo },
     })
   } catch (error) {
     console.error('enroll error:', error)
@@ -80,6 +117,7 @@ export const unenrollFromCourse = async (req: Request, res: Response) => {
     )
     if (!rows.length) return res.status(404).json({ success: false, message: tr(req, "Inscription introuvable", "Enrollment not found") })
 
+    await releaseCouponForEnrollment(enrollmentId)
     await query('DELETE FROM course_enrollments WHERE id = ?', [enrollmentId])
     return res.json({ success: true, message: tr(req, "Désinscription effectuée", "Unenrollment completed") })
   } catch (error) {
@@ -251,7 +289,9 @@ export const submitPayment = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: tr(req, "Paiement déjà validé", "Payment already approved") })
 
     const actualEnrollmentId = enrollments[0].id
-    const actualAmount       = Number(amount) || Number(enrollments[0].price) || 0
+    const dueWithCoupon      = await amountDueForEnrollment(Number(actualEnrollmentId))
+    const [couponRow]: any   = await query('SELECT coupon_id FROM course_enrollments WHERE id = ?', [actualEnrollmentId])
+    const actualAmount       = couponRow?.coupon_id && dueWithCoupon !== null ? dueWithCoupon : (Number(amount) || Number(enrollments[0].price) || 0)
 
     // URL preuve: fichier uploadé (multer) OU champ JSON
     const fileUploaded = (req as any).file
@@ -370,7 +410,7 @@ export const validateEnrollment = async (req: Request, res: Response) => {
       [approved ? 1 : 0, approved ? 'verified' : 'rejected', enrollmentId]
     )
     if (approved) await recordCommissionsForEnrollment(enrollmentId)
-    else await voidCommissionsForEnrollment(enrollmentId)
+    else { await voidCommissionsForEnrollment(enrollmentId); await releaseCouponForEnrollment(enrollmentId) }
     return res.json({ success: true, message: approved ? tr(req, "Inscription approuvée", "Enrollment approved") : tr(req, "Inscription rejetée", "Enrollment rejected") })
   } catch (error) {
     console.error('validateEnrollment error:', error)
@@ -406,6 +446,7 @@ export const adminApproveEnrollment = async (req: Request, res: Response) => {
 export const adminDeleteEnrollment = async (req: Request, res: Response) => {
   try {
     const enrollmentId = Number(req.params.id)
+    await releaseCouponForEnrollment(enrollmentId)
     await query('DELETE FROM course_enrollments WHERE id = ?', [enrollmentId])
     return res.json({ success: true, message: tr(req, "Inscription supprimée", "Enrollment removed") })
   } catch (error) {
@@ -420,6 +461,8 @@ export const rejectEnrollment = async (req: any, res: any) => {
   try {
     const { userId, courseId } = req.params;
     const reason = req.body?.reason || req.body?.rejection_reason || "Paiement non conforme";
+    const [enr]: any = await query('SELECT id FROM course_enrollments WHERE user_id = ? AND course_id = ?', [userId, courseId]);
+    if (enr) await releaseCouponForEnrollment(Number(enr.id));
     await query(
       `UPDATE course_enrollments
        SET is_approved = 0, payment_status = 'rejected', rejection_reason = ?
@@ -504,6 +547,7 @@ export const rejectEnrollmentById = async (req: any, res: any) => {
       [id]
     );
     await voidCommissionsForEnrollment(Number(id));
+    await releaseCouponForEnrollment(Number(id));
     // Email de rejet
     try {
       const [row]: any = await query(

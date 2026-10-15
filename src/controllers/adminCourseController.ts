@@ -11,6 +11,7 @@ import { tr, getUserLang } from "../utils/lang";
 import { toPlain, parseId } from "../utils/serialize";
 import { createNotification } from "../services/notification.service";
 import { defaultCommissionRate } from "../services/commission.service";
+import { saveReviewRound, listReviewRounds, REVIEW_CRITERIA } from "./programCommsController";
 
 type Req = AuthenticatedRequest;
 const num = (v: any) => (v === null || v === undefined ? 0 : Number(v) || 0);
@@ -140,6 +141,8 @@ export const getCourseReview = async (req: Req, res: Response) => {
         modules: modules.map((m) => ({ ...m, lessons: lessons.filter((l) => l.module_id === m.id) })),
         team,
         resources,
+        rounds: await listReviewRounds(id!),
+        review_criteria: REVIEW_CRITERIA,
         default_rate: defaultCommissionRate(),
       },
     });
@@ -191,6 +194,7 @@ export const approveCourse = async (req: Req, res: Response) => {
     notifyLocalized(Number(course.instructor_id), "success",
       ["Cours publié", `« ${course.title} » a été validé et publié.`],
       ["Course published", `“${course.title}” has been approved and published.`], `/instructor/courses/${id}/modules`);
+    await saveReviewRound(req.user!.id, id!, "approved", req.body?.grid, null);
     await audit(req, "course.approved", id!, { commission_rate: rate ?? null });
     return res.json({ success: true, message: tr(req, "Cours validé et publié.", "Course approved and published.") });
   } catch (error) {
@@ -213,6 +217,7 @@ export const rejectCourse = async (req: Req, res: Response) => {
     notifyLocalized(Number(course.instructor_id), "warning",
       ["Cours à corriger", `« ${course.title} » n'a pas été validé : ${reason}`],
       ["Course needs changes", `“${course.title}” was not approved: ${reason}`], `/instructor/courses/${id}/edit`);
+    await saveReviewRound(req.user!.id, id!, "changes_requested", req.body?.grid, reason);
     await audit(req, "course.rejected", id!, { reason });
     return res.json({ success: true, message: tr(req, "Cours renvoyé à l'instructeur.", "Course sent back to the instructor.") });
   } catch (error) {

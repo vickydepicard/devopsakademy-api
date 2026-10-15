@@ -32,14 +32,25 @@ import certificateRoutes    from "./routes/certificate.routes"; // NOUVEAU
 import notificationRoutes    from "./routes/notification.routes";
 import uploadsRoutes         from "./routes/uploads.routes";
 import { ensureNotificationsTable } from "./services/notification.service";
+import { ensureApplicationReviewTables, startInterviewReminders } from "./controllers/applicationReviewController";
+import { ensureProgramTables } from "./controllers/programSetup";
+import { ensureMarketingTables } from "./controllers/marketingSetup";
+import translationsRoutes from "./routes/translations.routes";
+import { ensureTranslationTables, translateResponses } from "./services/contentTranslation";
+import { startMarketingJobs } from "./controllers/marketingJobs";
+import { runOnboardingReminders } from "./controllers/programOnboardingController";
 import { ensureUserLanguageColumn } from "./utils/lang";
 import instructorAppRoutes   from "./routes/instructor.routes";       // Candidatures instructeur
 import instructorPortalRoutes from "./routes/instructorPortal.routes"; // Espace instructeur
+import instructorProgramRoutes from "./routes/instructorProgram.routes"; // Programme instructeurs
+import marketingRoutes from "./routes/marketing.routes"; // Newsletter, offres, bannières, réseaux sociaux
 import quizRoutes             from "./routes/quiz.routes";             // Quiz (étudiant)
 import leaderboardRoutes      from "./routes/leaderboard.routes";      // Classement public
 import subscriptionRoutes     from "./routes/subscription.routes";     // Abonnements
 import paymentRoutes          from "./routes/payment.routes";          // Preuves de paiement
 import submissionRoutes       from "./routes/submission";              // Devoirs
+import { campaignPublicRouter, campaignAdminRouter, themeAdminRouter } from "./routes/campaign.routes"; // Campagnes & thèmes
+import { ensureCampaignTables } from "./controllers/campaignController";
 
 // Middleware
 import { errorHandler }         from "./middleware/errorHandler";
@@ -222,6 +233,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   return checkTokenExpiration(req, res, next);
 });
 
+// Traduction du contenu (cours, modules, leçons, catégories…) selon la langue du visiteur
+app.use(["/api/courses", "/api/categories", "/api/enrollments", "/api/bootcamps", "/api/subscriptions", "/api/certificates", "/api/progress"], translateResponses);
+
 // ── API ROUTES ──
 app.use("/api/auth",         authRoutes);
 app.get("/api/categories", getAllCategories); // liste publique (formulaire de cours, filtres)
@@ -233,10 +247,17 @@ app.get("/api/settings/public", getPublicSettings as any);
 app.use("/api/forum",        forumRoutes);
 app.use("/api/enrollments",  enrollmentsRoutes);
 app.use("/api/courses",      lessonProgressRoutes);
+// Campagnes & thèmes : montés AVANT /api/admin pour ne pas être interceptés par son routeur
+app.use("/api/campaigns",    campaignPublicRouter);
+app.use("/api/admin/translations", translationsRoutes);
+app.use("/api/admin/campaigns", campaignAdminRouter);
+app.use("/api/admin/themes",    themeAdminRouter);
 app.use("/api/admin",        adminRoutes);
 // Espace instructeur : routes dédiées avec contrôle de propriété du cours
 // (avant : alias vers le routeur admin → 403 pour tous les instructeurs)
 app.use("/api/instructor",   instructorPortalRoutes);
+app.use("/api/marketing", marketingRoutes); // Newsletter, offres, bannières, promotions
+app.use("/api/instructor-program", instructorProgramRoutes); // Intégration, contrat, versements, paliers, messages…
 app.use("/api/quizzes",      quizRoutes);
 app.use("/api/contacts",     contactRoutes);
 app.use("/api/uploads",      uploadsRoutes);
@@ -261,6 +282,15 @@ app.use(errorHandler);
 
 ensureNotificationsTable().catch(e => console.error("Table notifications:", e.message));
 ensureUserLanguageColumn().catch(e => console.error("Colonne users.preferred_language:", e.message));
+ensureCampaignTables().catch(e => console.error("Tables campagnes:", e.message));
+ensureApplicationReviewTables().catch(e => console.error("Tables suivi candidatures:", e.message));
+startInterviewReminders();
+ensureProgramTables().catch(e => console.error("Tables programme instructeurs:", e.message));
+setTimeout(runOnboardingReminders, 60_000).unref?.();
+setInterval(runOnboardingReminders, 6 * 3600_000).unref?.();
+ensureMarketingTables().catch(e => console.error("Tables marketing:", e.message));
+ensureTranslationTables().catch(e => console.error("Table traductions:", e.message));
+startMarketingJobs();
 
 console.log("DevOpsAkademy API routes loaded");
 
